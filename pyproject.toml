@@ -1,0 +1,11 @@
+﻿[project]
+name = "codeyz"
+version = "0.1.0"
+dependencies = [
+    "openai",
+    "python-dotenv",
+    "typer",
+    "rich",
+    "fastapi",
+    "uvicorn",
+]

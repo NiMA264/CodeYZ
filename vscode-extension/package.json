@@ -1,0 +1,65 @@
+﻿{
+  "name": "codeyz",
+  "displayName": "CodeYZ",
+  "description": "CodeYZ sidebar for local agent server",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onCommand:codeyz.openChat",
+    "onView:codeyz.chatView"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codeyz.openChat",
+        "title": "CodeYZ: Open Chat"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codeyz",
+          "title": "CodeYZ",
+          "icon": "media/codeyz.svg"
+        }
+      ]
+    },
+    "views": {
+      "codeyz": [
+        {
+          "id": "codeyz.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CodeYZ",
+      "properties": {
+        "codeyz.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8765",
+          "description": "Local CodeYZ server URL"
+        },
+        "codeyz.localToken": {
+          "type": "string",
+          "default": "",
+          "description": "Optional CODEYZ_LOCAL_TOKEN sent as x-api-key"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "@types/node": "^20.14.2",
+    "typescript": "^5.5.4"
+  }
+}

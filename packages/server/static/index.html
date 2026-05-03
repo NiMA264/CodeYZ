@@ -1,0 +1,62 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CodeYZ Local UI</title>
+  <link rel="stylesheet" href="/ui/style.css" />
+</head>
+<body>
+  <main class="layout">
+    <aside class="sidebar">
+      <h1>CodeYZ</h1>
+      <button id="new-chat" type="button">Neuer Chat</button>
+
+      <section class="panel">
+        <h2>Token</h2>
+        <input id="token-input" type="password" placeholder="CODEYZ_LOCAL_TOKEN (optional)" />
+        <div class="row">
+          <button id="save-token" type="button">Speichern</button>
+          <button id="clear-token" type="button">Löschen</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Projektpfade</h2>
+        <pre id="projects">-</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Plugins</h2>
+        <pre id="plugins">-</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Automationen</h2>
+        <pre id="automations">-</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Git Status</h2>
+        <pre id="git-status">-</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Git Diff</h2>
+        <pre id="git-diff">-</pre>
+      </section>
+    </aside>
+
+    <section class="chat-area">
+      <section id="messages" class="messages" aria-live="polite"></section>
+      <form id="chat-form" class="composer">
+        <input id="message-input" type="text" placeholder="Nachricht an CodeYZ..." autocomplete="off" required />
+        <button id="send-btn" type="submit">Senden</button>
+      </form>
+      <p id="status" class="status" hidden>Lade...</p>
+    </section>
+  </main>
+
+  <script src="/ui/app.js" defer></script>
+</body>
+</html>
