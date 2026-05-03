@@ -13,6 +13,7 @@ const tokenInput = document.getElementById("token-input");
 const saveTokenBtn = document.getElementById("save-token");
 const clearTokenBtn = document.getElementById("clear-token");
 
+const workspaceSummaryEl = document.getElementById("workspace-summary");
 const projectsEl = document.getElementById("projects");
 const pluginsEl = document.getElementById("plugins");
 const automationsEl = document.getElementById("automations");
@@ -78,7 +79,8 @@ function renderPre(el, value) {
 
 async function refreshPanels() {
   try {
-    const [projects, plugins, automations, gitStatus, gitDiff] = await Promise.all([
+    const [workspace, projects, plugins, automations, gitStatus, gitDiff] = await Promise.all([
+      apiGet("/workspace/summary"),
       apiGet("/projects"),
       apiGet("/plugins"),
       apiGet("/automations"),
@@ -86,6 +88,7 @@ async function refreshPanels() {
       apiGet("/git/diff"),
     ]);
 
+    renderPre(workspaceSummaryEl, workspace.summary || workspace);
     renderPre(projectsEl, projects.projects || projects);
     renderPre(pluginsEl, plugins.plugins || plugins);
     renderPre(automationsEl, automations.automations || automations);
@@ -93,6 +96,7 @@ async function refreshPanels() {
     renderPre(gitDiffEl, gitDiff.diff || gitDiff);
   } catch (err) {
     const msg = `Fehler: ${err.message}`;
+    workspaceSummaryEl.textContent = msg;
     projectsEl.textContent = msg;
     pluginsEl.textContent = msg;
     automationsEl.textContent = msg;
