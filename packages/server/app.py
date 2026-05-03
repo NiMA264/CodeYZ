@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from packages.core.agent import ask
 from packages.core.plugins import register_plugin
 from packages.core.sessions import add_message, create_session
+from packages.core.workspace_context import build_workspace_context
 from packages.server.auth import require_auth
 from packages.server.routes_automation import router as automations_router
 from packages.server.routes_plugins import router as plugins_router
@@ -29,6 +30,12 @@ class ChatRequest(BaseModel):
 
 def _ping_handler() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _needs_workspace_context(message: str) -> bool:
+    lowered = message.lower()
+    triggers = ["workspace", "projekt", "project", "analysiere", "analyze", "codeyz"]
+    return any(token in lowered for token in triggers)
 
 
 register_plugin("ping", "Simple health plugin", _ping_handler)
@@ -59,12 +66,22 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/workspace/summary", dependencies=[Depends(require_auth)])
+def workspace_summary() -> dict[str, str]:
+    return {"summary": build_workspace_context()}
+
+
 @app.post("/chat", dependencies=[Depends(require_auth)])
 def chat(payload: ChatRequest) -> dict[str, str]:
     session_id = payload.session_id or create_session()
     add_message(session_id, "user", payload.message)
 
-    answer = ask(payload.message, payload.context)
+    full_context = payload.context or ""
+    if _needs_workspace_context(payload.message):
+        workspace_context = build_workspace_context()
+        full_context = f"{full_context}\n\nWorkspace context:\n{workspace_context}".strip()
+
+    answer = ask(payload.message, full_context)
 
     add_message(session_id, "assistant", answer)
     return {"session_id": session_id, "response": answer}
