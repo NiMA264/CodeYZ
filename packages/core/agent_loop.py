@@ -4,11 +4,15 @@ from typing import Any
 
 from openai import OpenAI
 
+from packages.core.agent_pipeline import run_multi_agent_task
 from packages.core.executor import run_build, run_tests, summarize_errors
 from packages.core.patcher import apply_patch
+from packages.core.permissions import assert_can_run_autonomous
+from packages.core.task_runs import add_event, create_run, finish_run, get_run
 from packages.tools.files import list_files, read_file
 
 MODEL = os.getenv("CODEYZ_MODEL", "gpt-5.4-mini")
+ALLOWED_MODELS = {"gpt-5.4-mini", "gpt-5.4", "gpt-5.5"}
 SYSTEM = """
 You are CodeYZ autonomous coding agent.
 Rules:
@@ -44,10 +48,10 @@ def _extract_json(text: str) -> dict[str, Any]:
     end = raw.rfind("}")
     if start == -1 or end == -1:
         raise ValueError("No JSON payload returned")
-    return json.loads(raw[start:end + 1])
+    return json.loads(raw[start : end + 1])
 
 
-def _plan_and_patch(task: str, error_context: str = "") -> dict[str, Any]:
+def _plan_and_patch(task: str, error_context: str = "", model: str | None = None) -> dict[str, Any]:
     snapshot = _project_snapshot()
     prompt = f"""
 Task: {task}
@@ -63,8 +67,9 @@ Return JSON with keys:
 - patches: array of objects {{"file_path": "...", "new_content": "..."}}
 Limit patches to at most 3 files.
 """
+    selected_model = model if model in ALLOWED_MODELS else MODEL
     response = _client().responses.create(
-        model=MODEL,
+        model=selected_model,
         input=[
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": prompt},
@@ -73,14 +78,38 @@ Limit patches to at most 3 files.
     return _extract_json(response.output_text)
 
 
-def run_autonomous_task(task: str) -> dict[str, Any]:
+def run_autonomous_task(
+    task: str,
+    model: str | None = None,
+    access_level: str | None = None,
+    use_multi_agent: bool = False,
+    max_cost_usd: float | None = None,
+) -> dict[str, Any]:
+    if use_multi_agent:
+        return run_multi_agent_task(task=task, access_level=access_level, model=model, max_cost_usd=max_cost_usd)
+
+    run_id = create_run(task=task, model=model, access_level=access_level)
+    add_event(run_id, "analyze", "Autonomous task started", {"task": task})
+
+    try:
+        assert_can_run_autonomous(access_level)
+    except PermissionError as exc:
+        add_event(run_id, "error", "Access denied", {"error": str(exc)})
+        finish_run(run_id, "blocked", str(exc))
+        run = get_run(run_id)
+        return {"ok": False, "run_id": run_id, "error": str(exc), "events": run["events"] if run else []}
+
     logs: list[dict[str, Any]] = []
     last_error = ""
 
     for iteration in range(1, 6):
         step: dict[str, Any] = {"iteration": iteration}
-        plan_payload = _plan_and_patch(task, last_error)
-        step["plan"] = plan_payload.get("plan", "")
+        add_event(run_id, "plan", f"Iteration {iteration}: planning")
+
+        plan_payload = _plan_and_patch(task, last_error, model=model)
+        plan_text = plan_payload.get("plan", "")
+        step["plan"] = plan_text
+        add_event(run_id, "plan", f"Iteration {iteration}: plan ready", {"plan": plan_text})
 
         patch_results: list[dict[str, str]] = []
         for patch in plan_payload.get("patches", [])[:3]:
@@ -89,25 +118,45 @@ def run_autonomous_task(task: str) -> dict[str, Any]:
             if not file_path:
                 continue
             try:
-                patch_results.append(apply_patch(file_path, new_content))
+                patch_result = apply_patch(file_path, new_content, access_level=access_level)
+                patch_results.append(patch_result)
+                add_event(run_id, "patch", f"Iteration {iteration}: patched {file_path}", {"file": file_path, "rollback_id": patch_result.get("rollback_id")})
+                add_event(run_id, "diff", f"Iteration {iteration}: diff for {file_path}", {"diff": patch_result.get("diff", ""), "rollback_id": patch_result.get("rollback_id")})
             except Exception as exc:
-                patch_results.append({"file": file_path, "diff": "", "archive": "", "error": str(exc)})
+                error_result = {"file": file_path, "diff": "", "archive": "", "error": str(exc)}
+                patch_results.append(error_result)
+                add_event(run_id, "error", f"Iteration {iteration}: patch failed", error_result)
 
         step["patches"] = patch_results
 
-        build_result = run_build()
-        test_result = run_tests()
+        build_result = run_build(access_level=access_level)
+        test_result = run_tests(access_level=access_level)
         step["build"] = build_result
         step["tests"] = test_result
+        add_event(run_id, "build", f"Iteration {iteration}: build", build_result)
+        add_event(run_id, "test", f"Iteration {iteration}: tests", test_result)
 
         if bool(build_result.get("ok")) and bool(test_result.get("ok")):
             step["status"] = "done"
             logs.append(step)
-            return {"ok": True, "iterations": logs}
+            add_event(run_id, "result", "Autonomous task finished", {"status": "done", "iteration": iteration})
+            finish_run(run_id, "done", "Build and tests passed")
+            run = get_run(run_id)
+            return {"ok": True, "run_id": run_id, "iterations": logs, "events": run["events"] if run else []}
 
         step["status"] = "needs_fix"
         last_error = summarize_errors(str(build_result.get("output", "")), str(test_result.get("output", "")))
         step["error_summary"] = last_error
         logs.append(step)
+        add_event(run_id, "fix", f"Iteration {iteration}: fix needed", {"error_summary": last_error})
 
-    return {"ok": False, "iterations": logs, "error": "Max iterations reached"}
+    add_event(run_id, "result", "Autonomous task reached iteration limit", {"status": "failed"})
+    finish_run(run_id, "failed", "Max iterations reached")
+    run = get_run(run_id)
+    return {
+        "ok": False,
+        "run_id": run_id,
+        "iterations": logs,
+        "events": run["events"] if run else [],
+        "error": "Max iterations reached",
+    }

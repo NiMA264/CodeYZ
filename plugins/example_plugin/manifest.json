@@ -1,0 +1,8 @@
+﻿{
+  "name": "example_plugin",
+  "description": "Test Plugin",
+  "version": "1.0",
+  "permissions": ["read_files", "http"],
+  "entry": "plugin.py",
+  "functions": ["run"]
+}

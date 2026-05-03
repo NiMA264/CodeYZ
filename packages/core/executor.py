@@ -1,4 +1,5 @@
-﻿from packages.tools.shell import run_shell
+﻿from packages.core.permissions import assert_can_run_tests
+from packages.tools.shell import run_shell
 
 
 def _summarize(text: str, max_chars: int = 2000) -> str:
@@ -8,13 +9,15 @@ def _summarize(text: str, max_chars: int = 2000) -> str:
     return compact[:max_chars] + "\n...[TRUNCATED]"
 
 
-def run_tests() -> dict[str, str | bool]:
+def run_tests(access_level: str | None = None) -> dict[str, str | bool]:
+    assert_can_run_tests(access_level)
     output = run_shell("py -3.11 -m pytest")
     failed = "failed" in output.lower() or "error" in output.lower() or "no module named" in output.lower()
     return {"ok": not failed, "output": _summarize(output)}
 
 
-def run_build() -> dict[str, str | bool]:
+def run_build(access_level: str | None = None) -> dict[str, str | bool]:
+    assert_can_run_tests(access_level)
     output = run_shell("py -3.11 -m compileall packages")
     failed = "traceback" in output.lower() or "error" in output.lower()
     return {"ok": not failed, "output": _summarize(output)}

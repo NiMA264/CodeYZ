@@ -25,7 +25,7 @@ def get_projects() -> dict[str, list[str]]:
 @router.post("")
 def create_project(payload: ProjectCreateRequest) -> dict[str, str]:
     try:
-        added = add_project_path(payload.path)
+        added = add_project_path(payload.path.strip())
         return {"added": added}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -39,7 +39,7 @@ def get_current_project_route() -> dict[str, str]:
 @router.post("/current")
 def set_current_project_route(payload: ProjectCreateRequest) -> dict[str, str]:
     try:
-        current = set_current_project(payload.path)
+        current = set_current_project(payload.path.strip())
         return {"current": current}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

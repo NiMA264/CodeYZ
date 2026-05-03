@@ -17,7 +17,7 @@ def require_auth(request: Request) -> None:
     configured_token = os.getenv("CODEYZ_LOCAL_TOKEN")
 
     if configured_token:
-        header_token = request.headers.get("x-api-key")
+        header_token = (request.headers.get("x-api-key") or "").strip()
         if not header_token:
             auth_header = request.headers.get("authorization", "")
             if auth_header.lower().startswith("bearer "):

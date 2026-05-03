@@ -2,7 +2,7 @@
 
 from openai import OpenAI
 
-from packages.tools.files import list_files, read_file
+from packages.tools.files import list_files
 from packages.tools.git import git_diff, git_status
 from packages.tools.shell import run_shell
 

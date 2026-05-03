@@ -2,12 +2,17 @@
 from difflib import unified_diff
 from pathlib import Path
 
-from packages.tools.files import PROJECT_ROOT, safe_path
+from packages.core.permissions import assert_can_write_files
+from packages.core.rollback import create_rollback_record
+from packages.core.runtime_paths import ensure_runtime_dirs
+from packages.tools.files import safe_path
 
-DIFF_ARCHIVE_DIR = PROJECT_ROOT / ".codeyz_diffs"
+DIFF_ARCHIVE_DIR = ensure_runtime_dirs()["diffs"]
 
 
-def apply_patch(file_path: str, new_content: str) -> dict[str, str]:
+def apply_patch(file_path: str, new_content: str, access_level: str | None = None) -> dict[str, str]:
+    assert_can_write_files(access_level)
+
     target = safe_path(file_path)
     old_content = ""
     if target.exists():
@@ -23,6 +28,13 @@ def apply_patch(file_path: str, new_content: str) -> dict[str, str]:
         )
     )
 
+    rollback = create_rollback_record(
+        file_path=file_path,
+        before_content=old_content,
+        after_content=new_content,
+        diff=diff_text,
+    )
+
     DIFF_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
     sanitized = file_path.replace("/", "_").replace("\\", "_")
@@ -35,5 +47,6 @@ def apply_patch(file_path: str, new_content: str) -> dict[str, str]:
     return {
         "file": file_path,
         "diff": diff_text,
-        "archive": str(Path(".codeyz_diffs") / archive_name),
+        "archive": str(Path("diffs") / archive_name),
+        "rollback_id": rollback["rollback_id"],
     }

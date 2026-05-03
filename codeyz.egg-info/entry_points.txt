@@ -1,0 +1,2 @@
+[console_scripts]
+codeyz = packages.cli.main:app

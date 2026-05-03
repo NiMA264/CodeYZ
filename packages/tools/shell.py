@@ -1,4 +1,5 @@
-﻿import subprocess
+﻿import re
+import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -9,8 +10,6 @@ BLOCKED_PATTERNS = [
     "format",
     "shutdown",
     "sudo",
-    "curl | sh",
-    "wget | sh",
     "git push --force",
     "git push",
     "deploy",
@@ -26,8 +25,15 @@ def _safe_cwd(cwd: str) -> Path:
     return target
 
 
+def _is_pipe_shell_install(lowered: str) -> bool:
+    return bool(re.search(r"\b(curl|wget)\b.*\|\s*sh\b", lowered))
+
+
 def run_shell(command: str, cwd: str = ".", timeout: int = 120) -> str:
     lowered = command.lower()
+
+    if _is_pipe_shell_install(lowered):
+        raise ValueError("Blocked dangerous command: curl/wget pipe to sh")
 
     for pattern in BLOCKED_PATTERNS:
         if pattern in lowered:

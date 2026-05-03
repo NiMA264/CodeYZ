@@ -9,25 +9,77 @@
 <body>
   <main class="layout">
     <aside class="sidebar">
-      <h1>CodeYZ</h1>
+      <h1>CodeYZ <span id="ui-version"></span></h1>
       <div class="row">
         <button id="new-chat" type="button">Neuer Chat</button>
         <button id="add-project" type="button">+ Projekt</button>
       </div>
 
-      <section class="panel">
+      <section class="panel fixed-panel">
         <h2>Aktueller Workspace</h2>
         <pre id="current-project">-</pre>
       </section>
 
       <section class="panel">
-        <h2>Explorer</h2>
-        <div id="explorer" class="explorer"></div>
+        <h2>System Status</h2>
+        <div id="system-status" class="status-list"></div>
+      </section>
+
+      <section class="panel fixed-panel">
+        <h2>Ausgewählte Datei</h2>
+        <pre id="selected-file">-</pre>
       </section>
 
       <section class="panel">
-        <h2>Ausgewählte Datei</h2>
-        <pre id="selected-file">-</pre>
+        <h2>Kontext</h2>
+        <div class="row">
+          <button id="pin-selected" type="button">Pin</button>
+          <span id="pinned-count" class="context-pill">Pinned: 0</span>
+        </div>
+        <div id="pinned-list" class="pinned-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Task Timeline</h2>
+        <div id="runs-list" class="runs-list"></div>
+        <div id="tool-decision-card" class="tool-decision-card">
+          <h3>Tool Decision</h3>
+          <div class="tool-decision-grid">
+            <span>Search</span><span id="td-search" class="badge disabled">disabled</span>
+            <span>Files</span><span id="td-files" class="badge disabled">disabled</span>
+            <span>Tests</span><span id="td-tests" class="badge disabled">disabled</span>
+            <span>Plugins</span><span id="td-plugins" class="badge disabled">disabled</span>
+          </div>
+          <p id="td-reasoning" class="tool-reasoning">Noch keine Tool-Entscheidung geladen.</p>
+        </div>
+        <details id="run-replay" class="run-replay">
+          <summary>Replay</summary>
+          <pre id="run-replay-content">Kein Run ausgewählt.</pre>
+        </details>
+      </section>
+
+      <section class="panel">
+        <h2>Plugins</h2>
+        <div id="plugins-list" class="runs-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Search</h2>
+        <input id="search-input" type="text" placeholder="Code durchsuchen..." />
+        <div class="row">
+          <button id="search-build" type="button">Index bauen</button>
+        </div>
+        <div id="search-results" class="runs-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Rollback</h2>
+        <div id="rollback-list" class="runs-list"></div>
+        <details class="run-replay">
+          <summary>Rollback Details</summary>
+          <pre id="rollback-detail">Kein Rollback ausgewählt.</pre>
+          <button id="rollback-apply" type="button">Rollback anwenden</button>
+        </details>
       </section>
 
       <section class="panel">
@@ -38,49 +90,103 @@
           <button id="clear-token" type="button">Löschen</button>
         </div>
       </section>
-
-      <section class="panel">
-        <h2>Workspace Summary</h2>
-        <pre id="workspace-summary">-</pre>
-      </section>
-
-      <section class="panel">
-        <h2>Projektpfade</h2>
-        <pre id="projects">-</pre>
-      </section>
-
-      <section class="panel">
-        <h2>Plugins</h2>
-        <pre id="plugins">-</pre>
-      </section>
-
-      <section class="panel">
-        <h2>Automationen</h2>
-        <pre id="automations">-</pre>
-      </section>
-
-      <section class="panel">
-        <h2>Git Status</h2>
-        <pre id="git-status">-</pre>
-      </section>
-
-      <section class="panel">
-        <h2>Git Diff</h2>
-        <pre id="git-diff">-</pre>
-      </section>
     </aside>
 
     <section class="chat-area">
       <section id="messages" class="messages" aria-live="polite"></section>
+
+      <div id="attachments" class="attachments"></div>
+
       <form id="chat-form" class="composer">
-        <input id="message-input" type="text" placeholder="Nachricht an CodeYZ..." autocomplete="off" required />
-        <button id="send-btn" type="submit">Senden</button>
-        <button id="auto-btn" type="button">Run Autonomous Task</button>
+        <div class="composer-top">
+          <button id="attach-btn" type="button" class="pill">+</button>
+          <select id="model-select" class="pill">
+            <option>gpt-5.4-mini</option>
+            <option>gpt-5.4</option>
+            <option>gpt-5.5</option>
+          </select>
+          <select id="mode-select" class="pill">
+            <option>Chat</option>
+            <option>Code</option>
+            <option>Review</option>
+            <option>Fix</option>
+            <option>Projekt planen</option>
+          </select>
+          <select id="access-select" class="pill">
+            <option>Nur lesen</option>
+            <option>Dateien ändern</option>
+            <option>Tests ausführen</option>
+            <option>Autonom</option>
+            <option disabled>Gefährlich deaktiviert</option>
+          </select>
+          <label class="plan-toggle"><input id="multi-agent" type="checkbox" /><span>Multi-Agent Mode</span></label>
+          <label class="plan-toggle">
+            <input id="plan-mode" type="checkbox" />
+            <span>Planmodus</span>
+          </label>
+          <input id="budget-input" type="number" min="0" step="0.01" placeholder="Budget $" />
+        </div>
+
+        <details class="panel role-models-panel">
+          <summary>Role Models</summary>
+          <div class="row">
+            <span>Planner</span>
+            <select id="rm-planner" class="pill"><option>gpt-5.5</option><option>gpt-5.4</option><option>gpt-5.4-mini</option></select>
+          </div>
+          <div class="row">
+            <span>Coder</span>
+            <select id="rm-coder" class="pill"><option>gpt-5.4</option><option>gpt-5.5</option><option>gpt-5.4-mini</option></select>
+          </div>
+          <div class="row">
+            <span>Tester</span>
+            <select id="rm-tester" class="pill"><option>gpt-5.4-mini</option><option>gpt-5.4</option><option>gpt-5.5</option></select>
+          </div>
+          <div class="row">
+            <span>Reviewer</span>
+            <select id="rm-reviewer" class="pill"><option>gpt-5.5</option><option>gpt-5.4</option><option>gpt-5.4-mini</option></select>
+          </div>
+          <div class="row">
+            <span>Fixer</span>
+            <select id="rm-fixer" class="pill"><option>gpt-5.4</option><option>gpt-5.5</option><option>gpt-5.4-mini</option></select>
+          </div>
+        </details>
+
+        <textarea id="message-input" rows="2" placeholder="Nachricht an CodeYZ..."></textarea>
+
+        <div class="composer-actions">
+          <span class="context-pill" id="context-project">Projekt: -</span>
+          <span class="context-pill" id="context-selected-file">Selected: -</span>
+          <span class="context-pill" id="context-pinned">Pinned: 0</span>
+          <span class="context-pill" id="context-cost">Estimated: $0.000000</span>
+          <button id="send-btn" type="submit" class="pill primary">Senden</button>
+          <button id="auto-btn" type="button" class="pill">Run Autonomous Task</button>
+        </div>
+
+        <input id="file-input" type="file" multiple hidden />
       </form>
+
       <p id="status" class="status" hidden>Lade...</p>
     </section>
+
+    <aside class="explorer-pane" id="explorer-pane">
+      <header class="explorer-header">
+        <h2>Explorer</h2>
+        <button id="toggle-explorer" type="button">Ausblenden</button>
+      </header>
+      <pre id="explorer-workspace">-</pre>
+      <input id="file-filter" type="text" placeholder="Dateien filtern..." />
+      <div id="explorer" class="explorer"></div>
+      <section class="panel preview-panel">
+        <div class="row">
+          <h2>Datei-Vorschau</h2>
+          <button id="preview-pin" type="button">Pin</button>
+        </div>
+        <pre id="file-preview">Datei auswählen...</pre>
+      </section>
+    </aside>
   </main>
 
   <script src="/ui/app.js" defer></script>
 </body>
 </html>
+

@@ -1,0 +1,4 @@
+--- a/tests/.tmp_access.txt
++++ b/tests/.tmp_access.txt
+@@ -0,0 +1 @@
++ok

@@ -1,94 +1,94 @@
 ﻿# CodeYZ
 
-CodeYZ is a local coding agent similar to Codex.
+CodeYZ is a local coding agent with CLI, API server, Web UI, and VS Code integration.
+
+## Quickstart (Source)
+
+```bash
+git clone <repo-url>
+cd CodeYZ
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -e .
+codeyz setup
+codeyz server
+```
+
+Open: `http://127.0.0.1:8765/ui/`
+
+## Download & Install (Windows)
+
+### EXE build locally
+
+```bash
+python scripts/build_exe.py
+```
+
+Result: `dist/codeyz.exe`
+
+### Installer (NSIS)
+
+- Script: `installer/codeyz_installer.nsi`
+- Installs to: `C:\Program Files\CodeYZ`
+- Creates Desktop and Start Menu shortcuts.
+
+### First run
+
+```bash
+codeyz.exe server --open-browser
+```
+
+If no API key is configured, CodeYZ prompts once and stores it in:
+
+`%APPDATA%\CodeYZ\.env`
+
+## Commands
+
+- `codeyz setup` - environment checks
+- `codeyz server [--open-browser]` - start local API/UI server
+- `codeyz chat "..."` - quick model chat
+- `codeyz task "..."` - run task loop summary
+- `codeyz status` - git status
+- `codeyz diff` - git diff
+- `codeyz test` - run pytest
+
+## Runtime Data
+
+User config and runtime files are stored in:
+
+`%APPDATA%\CodeYZ\`
+
+- `.env`
+- `logs/`
+- `runs/`
+- `snapshots/`
+- `diffs/`
 
 ## Features
 
-* Autonomous code generation
-* Bug fixing loop
-* Docker sandbox execution
-* Git integration
-* VS Code integration
-* Safe shell command execution
-* Project-local file tools
-* Local FastAPI agent server
+- CLI + setup diagnostics
+- FastAPI server with auth and safe routes
+- Web UI with explorer, timeline, rollback, plugins, search, system status
+- Workspace indexing + relevance search
+- Context pinning and selected-file context
+- Autonomous run timeline with tool decisions
+- Safe shell + permission model
 
-## Stack
+## Security Model
 
-* Python (core)
-* FastAPI (server)
-* Typer (CLI)
-* SQLite (memory)
-* Docker (sandbox)
-* OpenAI API (intelligence)
+- Server is source of truth for permissions
+- Access levels: `Nur lesen`, `Dateien ändern`, `Tests ausführen`, `Autonom`
+- Blocked paths: `.env`, `.venv`, `.git`, `node_modules`, outside workspace
+- No auto-commit/push/deploy
+- OpenAI key only via env/local secret
 
-## CLI Commands
+## Fehlerbehandlung
 
-* `python -m packages.cli.main ask-cmd "<task>"`
-* `python -m packages.cli.main test`
-* `python -m packages.cli.main diff`
-* `python -m packages.cli.main status`
-* `python -m packages.cli.main run-task-cmd "<task>"`
-* `python -m packages.cli.main server`
+- Missing API key: set `OPENAI_API_KEY` or use first-run prompt
+- Server unreachable: start with `codeyz server`
+- Plugin error: check plugin panel, disable/enable plugin
+- Budget exceeded: raise budget or split task
 
-## Server (Phase 3)
+## Version
 
-Start server:
-
-* `python -m packages.cli.main server`
-* Base URL: `http://127.0.0.1:8765`
-
-Endpoints:
-
-* `GET /health`
-* `POST /chat`
-* `POST /task`
-* `GET /git/status`
-* `GET /git/diff`
-* `GET /projects`
-* `POST /projects`
-* `GET /plugins`
-* `GET /automations`
-* `POST /automations`
-
-Auth:
-
-* If `CODEYZ_LOCAL_TOKEN` is set, send it via `x-api-key` or `Authorization: Bearer <token>`.
-* If `CODEYZ_LOCAL_TOKEN` is not set, only localhost access is allowed.
-
-## Safety Rules
-
-* No auto-commit
-* No auto-push
-* No passwords stored
-* OpenAI API key only via environment variable or local secret file (not committed)
-* No file access outside explicitly allowed project paths
-* No browser automation login for ChatGPT
-* No external connections except OpenAI API
-
-## Integration Roadmap
-
-ChatGPT integration comes later via Apps SDK, GPT Action, or MCP.
-
-## Goal
-
-Create a cost-efficient, token-optimized coding agent.
-
-## VS Code Extension (Phase 5)
-
-CodeYZ includes a local VS Code sidebar extension in `vscode-extension/`.
-
-Setup:
-
-1. `cd vscode-extension`
-2. `npm install`
-3. `npm run compile`
-4. Open `vscode-extension` in VS Code
-5. Press `F5` to launch Extension Development Host
-
-Notes:
-
-* CodeYZ server must run separately at `http://127.0.0.1:8765`.
-* Configure `codeyz.serverUrl` and optional `codeyz.localToken` in VS Code settings.
-* The extension sends token only as `x-api-key` header.
-* No OpenAI key is stored in the extension.
+Current version is stored in `VERSION` and exposed in `/health` and UI.

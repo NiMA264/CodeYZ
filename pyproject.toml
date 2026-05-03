@@ -1,4 +1,8 @@
-﻿[project]
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
 name = "codeyz"
 version = "0.1.0"
 dependencies = [
@@ -8,4 +12,14 @@ dependencies = [
     "rich",
     "fastapi",
     "uvicorn",
+    "pytest",
+    "httpx",
+    "ruff",
 ]
+
+[project.scripts]
+codeyz = "packages.cli.main:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["packages*"]

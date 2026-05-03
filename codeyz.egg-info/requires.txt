@@ -1,0 +1,9 @@
+openai
+python-dotenv
+typer
+rich
+fastapi
+uvicorn
+pytest
+httpx
+ruff
