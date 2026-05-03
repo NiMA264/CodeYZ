@@ -20,7 +20,7 @@ body {
 .layout {
   height: 100vh;
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 340px 1fr;
 }
 
 .sidebar {
@@ -82,6 +82,34 @@ input {
   margin-bottom: 8px;
 }
 
+.explorer {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  background: #12151c;
+}
+
+.tree-item {
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin: 2px 0;
+}
+
+.tree-item .file {
+  color: #cfe6ff;
+  cursor: pointer;
+}
+
+.tree-item .file:hover {
+  color: #ffffff;
+}
+
+.tree-item .dir {
+  color: var(--muted);
+}
+
 .chat-area {
   padding: 16px;
   display: grid;
@@ -128,7 +156,6 @@ input {
   .sidebar {
     border-right: none;
     border-bottom: 1px solid var(--border);
-    max-height: 38vh;
+    max-height: 45vh;
   }
 }
-

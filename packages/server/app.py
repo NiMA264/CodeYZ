@@ -26,6 +26,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
     context: str = ""
+    selected_file: str | None = None
 
 
 def _ping_handler() -> dict[str, str]:
@@ -77,6 +78,9 @@ def chat(payload: ChatRequest) -> dict[str, str]:
     add_message(session_id, "user", payload.message)
 
     full_context = payload.context or ""
+    if payload.selected_file:
+        full_context = f"{full_context}\n\nSelected file:\n{payload.selected_file}".strip()
+
     if _needs_workspace_context(payload.message):
         workspace_context = build_workspace_context()
         full_context = f"{full_context}\n\nWorkspace context:\n{workspace_context}".strip()

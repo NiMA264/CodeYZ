@@ -10,7 +10,25 @@
   <main class="layout">
     <aside class="sidebar">
       <h1>CodeYZ</h1>
-      <button id="new-chat" type="button">Neuer Chat</button>
+      <div class="row">
+        <button id="new-chat" type="button">Neuer Chat</button>
+        <button id="add-project" type="button">+ Projekt</button>
+      </div>
+
+      <section class="panel">
+        <h2>Aktueller Workspace</h2>
+        <pre id="current-project">-</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Explorer</h2>
+        <div id="explorer" class="explorer"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Ausgewählte Datei</h2>
+        <pre id="selected-file">-</pre>
+      </section>
 
       <section class="panel">
         <h2>Token</h2>

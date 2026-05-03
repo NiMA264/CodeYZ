@@ -1,11 +1,13 @@
 ﻿const TOKEN_KEY = "codeyz_local_token";
 let sessionId = null;
+let selectedFile = "";
 
 const messagesEl = document.getElementById("messages");
 const formEl = document.getElementById("chat-form");
 const inputEl = document.getElementById("message-input");
 const statusEl = document.getElementById("status");
 const newChatBtn = document.getElementById("new-chat");
+const addProjectBtn = document.getElementById("add-project");
 const sendBtn = document.getElementById("send-btn");
 const autoBtn = document.getElementById("auto-btn");
 
@@ -13,6 +15,9 @@ const tokenInput = document.getElementById("token-input");
 const saveTokenBtn = document.getElementById("save-token");
 const clearTokenBtn = document.getElementById("clear-token");
 
+const currentProjectEl = document.getElementById("current-project");
+const explorerEl = document.getElementById("explorer");
+const selectedFileEl = document.getElementById("selected-file");
 const workspaceSummaryEl = document.getElementById("workspace-summary");
 const projectsEl = document.getElementById("projects");
 const pluginsEl = document.getElementById("plugins");
@@ -77,11 +82,50 @@ function renderPre(el, value) {
   el.textContent = JSON.stringify(value, null, 2);
 }
 
+function setSelectedFile(path) {
+  selectedFile = path || "";
+  selectedFileEl.textContent = selectedFile || "-";
+}
+
+function renderTreeNode(node, level = 0) {
+  const item = document.createElement("div");
+  item.className = "tree-item";
+  item.style.paddingLeft = `${level * 12}px`;
+
+  const label = document.createElement("span");
+  label.textContent = `${node.type === "directory" ? "▸" : "•"} ${node.name}`;
+  label.className = node.type === "file" ? "file" : "dir";
+  item.appendChild(label);
+
+  if (node.type === "file") {
+    label.addEventListener("click", () => setSelectedFile(node.path));
+  }
+
+  explorerEl.appendChild(item);
+
+  if (node.children && node.children.length) {
+    for (const child of node.children) {
+      renderTreeNode(child, level + 1);
+    }
+  }
+}
+
+function renderExplorer(tree) {
+  explorerEl.innerHTML = "";
+  if (!tree || !tree.children) {
+    explorerEl.textContent = "-";
+    return;
+  }
+  renderTreeNode(tree, 0);
+}
+
 async function refreshPanels() {
   try {
-    const [workspace, projects, plugins, automations, gitStatus, gitDiff] = await Promise.all([
+    const [workspace, projects, currentProject, tree, plugins, automations, gitStatus, gitDiff] = await Promise.all([
       apiGet("/workspace/summary"),
       apiGet("/projects"),
+      apiGet("/projects/current"),
+      apiGet("/projects/tree"),
       apiGet("/plugins"),
       apiGet("/automations"),
       apiGet("/git/status"),
@@ -90,6 +134,8 @@ async function refreshPanels() {
 
     renderPre(workspaceSummaryEl, workspace.summary || workspace);
     renderPre(projectsEl, projects.projects || projects);
+    renderPre(currentProjectEl, currentProject.current || currentProject);
+    renderExplorer(tree);
     renderPre(pluginsEl, plugins.plugins || plugins);
     renderPre(automationsEl, automations.automations || automations);
     renderPre(gitStatusEl, gitStatus.status || gitStatus);
@@ -98,6 +144,8 @@ async function refreshPanels() {
     const msg = `Fehler: ${err.message}`;
     workspaceSummaryEl.textContent = msg;
     projectsEl.textContent = msg;
+    currentProjectEl.textContent = msg;
+    explorerEl.textContent = msg;
     pluginsEl.textContent = msg;
     automationsEl.textContent = msg;
     gitStatusEl.textContent = msg;
@@ -108,7 +156,11 @@ async function refreshPanels() {
 async function sendMessage(message) {
   setLoading(true);
   try {
-    const data = await apiPost("/chat", { message, session_id: sessionId || null });
+    const data = await apiPost("/chat", {
+      message,
+      session_id: sessionId || null,
+      selected_file: selectedFile || null,
+    });
     sessionId = data.session_id || sessionId;
     addMessage("assistant", data.response || "Keine Antwort.");
     await refreshPanels();
@@ -180,6 +232,20 @@ autoBtn.addEventListener("click", async () => {
   await runAutonomousTask(task);
 });
 
+addProjectBtn.addEventListener("click", async () => {
+  const path = prompt("Projektpfad hinzufügen:");
+  if (!path) return;
+
+  try {
+    await apiPost("/projects", { path });
+    await apiPost("/projects/current", { path });
+    setSelectedFile("");
+    await refreshPanels();
+  } catch (err) {
+    addMessage("assistant", `Projekt konnte nicht gesetzt werden: ${err.message}`);
+  }
+});
+
 newChatBtn.addEventListener("click", () => {
   sessionId = null;
   messagesEl.innerHTML = "";
@@ -198,5 +264,6 @@ clearTokenBtn.addEventListener("click", async () => {
 });
 
 tokenInput.value = getToken();
+setSelectedFile("");
 addMessage("assistant", "CodeYZ UI bereit.");
 refreshPanels();
