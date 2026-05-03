@@ -7,6 +7,7 @@ const inputEl = document.getElementById("message-input");
 const statusEl = document.getElementById("status");
 const newChatBtn = document.getElementById("new-chat");
 const sendBtn = document.getElementById("send-btn");
+const autoBtn = document.getElementById("auto-btn");
 
 const tokenInput = document.getElementById("token-input");
 const saveTokenBtn = document.getElementById("save-token");
@@ -38,6 +39,19 @@ async function apiGet(url) {
   return resp.json();
 }
 
+async function apiPost(url, body) {
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: buildHeaders(),
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`HTTP ${resp.status}: ${text}`);
+  }
+  return resp.json();
+}
+
 function addMessage(role, text) {
   const el = document.createElement("div");
   el.className = `msg ${role}`;
@@ -50,6 +64,7 @@ function setLoading(isLoading) {
   statusEl.hidden = !isLoading;
   statusEl.textContent = isLoading ? "Lade..." : "";
   sendBtn.disabled = isLoading;
+  autoBtn.disabled = isLoading;
   inputEl.disabled = isLoading;
 }
 
@@ -89,23 +104,53 @@ async function refreshPanels() {
 async function sendMessage(message) {
   setLoading(true);
   try {
-    const resp = await fetch("/chat", {
-      method: "POST",
-      headers: buildHeaders(),
-      body: JSON.stringify({ message, session_id: sessionId || null })
-    });
-
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(`HTTP ${resp.status}: ${text}`);
-    }
-
-    const data = await resp.json();
+    const data = await apiPost("/chat", { message, session_id: sessionId || null });
     sessionId = data.session_id || sessionId;
     addMessage("assistant", data.response || "Keine Antwort.");
     await refreshPanels();
   } catch (err) {
     addMessage("assistant", `Fehler: ${err.message}`);
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function runAutonomousTask(task) {
+  setLoading(true);
+  addMessage("assistant", "Autonomous task gestartet...");
+  try {
+    const data = await apiPost("/task/auto", { task });
+    const iterations = data.iterations || [];
+
+    for (const step of iterations) {
+      const lines = [];
+      lines.push(`Iteration ${step.iteration}: ${step.status || ""}`);
+      if (step.plan) lines.push(`Plan: ${step.plan}`);
+
+      const patches = step.patches || [];
+      for (const p of patches) {
+        if (p.file) lines.push(`File: ${p.file}`);
+        if (p.archive) lines.push(`Diff saved: ${p.archive}`);
+        if (p.diff) lines.push(`Diff:\n${p.diff}`);
+        if (p.error) lines.push(`Patch error: ${p.error}`);
+      }
+
+      if (step.build && step.build.output) lines.push(`Build:\n${step.build.output}`);
+      if (step.tests && step.tests.output) lines.push(`Tests:\n${step.tests.output}`);
+      if (step.error_summary) lines.push(`Errors:\n${step.error_summary}`);
+
+      addMessage("assistant", lines.join("\n\n"));
+    }
+
+    if (!data.ok && data.error) {
+      addMessage("assistant", `Autonomous task beendet mit Fehler: ${data.error}`);
+    } else {
+      addMessage("assistant", "Autonomous task abgeschlossen.");
+    }
+
+    await refreshPanels();
+  } catch (err) {
+    addMessage("assistant", `Autonomous task Fehler: ${err.message}`);
   } finally {
     setLoading(false);
   }
@@ -119,6 +164,16 @@ formEl.addEventListener("submit", async (event) => {
   addMessage("user", message);
   inputEl.value = "";
   await sendMessage(message);
+});
+
+autoBtn.addEventListener("click", async () => {
+  const task = inputEl.value.trim();
+  if (!task) {
+    addMessage("assistant", "Bitte zuerst eine Aufgabe im Input eingeben.");
+    return;
+  }
+  addMessage("user", `[AUTO] ${task}`);
+  await runAutonomousTask(task);
 });
 
 newChatBtn.addEventListener("click", () => {
