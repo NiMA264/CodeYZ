@@ -51,6 +51,11 @@ def _apply_patches(patches: list[dict], access_level: str | None, run_id: str | 
                 result = apply_patch(file_path, new_content, access_level=access_level)
             out.append(result)
         except PatchApprovalRequired as exc:
+            patch_payload = {"file_path": file_path}
+            if unified_diff:
+                patch_payload["unified_diff"] = unified_diff
+            else:
+                patch_payload["new_content"] = new_content
             if run_id is not None:
                 _add_cost_event(
                     run_id,
@@ -62,6 +67,7 @@ def _apply_patches(patches: list[dict], access_level: str | None, run_id: str | 
                         "reasons": exc.reasons,
                         "stats": exc.stats,
                         "patch_preview": (exc.patch_text or unified_diff or new_content)[:1000],
+                        "patch": patch_payload,
                         "iteration": iteration or 0,
                     },
                     "coder",

@@ -12,6 +12,7 @@ export const state = {
   attachments: [],
   pinnedFiles: [],
   selectedRollbackId: "",
+  selectedRunId: "",
   collapsedDirs: new Set(),
 };
 
@@ -32,6 +33,7 @@ export const els = {
 
   runsListEl: document.getElementById("runs-list"),
   runReplayContentEl: document.getElementById("run-replay-content"),
+  approvalActionsEl: document.getElementById("approval-actions"),
   tdSearchEl: document.getElementById("td-search"),
   tdFilesEl: document.getElementById("td-files"),
   tdTestsEl: document.getElementById("td-tests"),

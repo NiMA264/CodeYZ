@@ -80,6 +80,7 @@ def add_event(
     agent_role: str | None = None,
 ) -> dict:
     event = {
+        "event_id": uuid4().hex,
         "ts": _now_iso(),
         "event_type": event_type,
         "agent_role": _sanitize(agent_role or ""),
@@ -141,3 +142,13 @@ def get_run(run_id: str) -> dict | None:
             "finished_at": run["finished_at"],
             "events": list(run["events"]),
         }
+
+
+def get_event(run_id: str, event_id: str) -> dict | None:
+    run = get_run(run_id)
+    if run is None:
+        return None
+    for event in run.get("events", []):
+        if str(event.get("event_id", "")) == event_id:
+            return event
+    return None

@@ -4,8 +4,9 @@ from pydantic import BaseModel
 from packages.core.agent_loop import run_autonomous_task
 from packages.core.loop import run_task
 from packages.core.model_router import set_role_models
+from packages.core.patcher import apply_patch, apply_unified_diff
 from packages.core.permissions import can_run_autonomous
-from packages.core.task_runs import get_run, list_runs
+from packages.core.task_runs import add_event, get_event, get_run, list_runs
 from packages.server.errors import raise_api_error
 
 router = APIRouter(prefix="/task", tags=["task"])
@@ -60,3 +61,59 @@ def task_run_by_id(run_id: str) -> dict:
     if run is None:
         raise_api_error(404, "run_not_found", "Run not found", "List runs via GET /task/runs first.")
     return run
+
+
+@router.post("/runs/{run_id}/approve-patch/{event_id}")
+def approve_patch(run_id: str, event_id: str) -> dict:
+    run = get_run(run_id)
+    if run is None:
+        raise_api_error(404, "run_not_found", "Run not found", "List runs via GET /task/runs first.")
+
+    event = get_event(run_id, event_id)
+    if event is None:
+        raise_api_error(404, "event_not_found", "Event not found", "Use an event_id from GET /task/runs/{run_id}.")
+    if event.get("event_type") != "approval_required":
+        raise_api_error(
+            400,
+            "event_not_approvable",
+            "Only approval_required events can be approved.",
+            "Select an approval_required event from the timeline.",
+        )
+
+    data = event.get("data") or {}
+    patch = data.get("patch") if isinstance(data, dict) else None
+    if not isinstance(patch, dict):
+        raise_api_error(400, "approval_patch_missing", "Stored patch payload missing.", "Retry task to regenerate approval event.")
+
+    file_path = str(patch.get("file_path", "")).strip()
+    unified_diff = str(patch.get("unified_diff", "")).strip()
+    new_content = patch.get("new_content")
+    if not file_path or (not unified_diff and not isinstance(new_content, str)):
+        raise_api_error(400, "approval_patch_invalid", "Stored patch payload is invalid.", "Retry task to regenerate approval event.")
+
+    try:
+        if unified_diff:
+            out = apply_unified_diff(file_path, unified_diff, access_level="Autonom", approved=True)
+        else:
+            out = apply_patch(file_path, str(new_content), access_level="Autonom", approved=True)
+    except Exception as exc:
+        add_event(
+            run_id,
+            "error",
+            "Approval apply failed",
+            {"source_event_id": event_id, "file": file_path, "error": str(exc)},
+            agent_role="reviewer",
+        )
+        raise_api_error(400, "approval_apply_failed", str(exc), "Review the stored patch and file context, then retry.")
+
+    payload = {
+        "source_event_id": event_id,
+        "file": file_path,
+        "risk_level": str(data.get("risk_level", "high")),
+        "reasons": data.get("reasons", []),
+        "stats": data.get("stats", {}),
+        "diff": out.get("diff", ""),
+        "rollback_id": out.get("rollback_id", ""),
+    }
+    applied_event = add_event(run_id, "approval_applied", "Approved patch applied", payload, agent_role="reviewer")
+    return {"ok": True, "run_id": run_id, "event": applied_event, "result": out}

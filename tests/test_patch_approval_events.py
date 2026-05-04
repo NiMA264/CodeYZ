@@ -25,7 +25,9 @@ def test_agent_loop_emits_approval_required_event(monkeypatch: pytest.MonkeyPatc
 
     out = agent_loop.run_autonomous_task("task", access_level="Autonom", model="gpt-5.4-mini")
     events = out["events"]
-    assert any(e["event_type"] == "approval_required" for e in events)
+    approval = next(e for e in events if e["event_type"] == "approval_required")
+    assert approval["data"]["patch"]["file_path"] == "a.py"
+    assert "unified_diff" in approval["data"]["patch"]
 
 
 def test_pipeline_emits_approval_required_event(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,7 +47,9 @@ def test_pipeline_emits_approval_required_event(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(agent_pipeline, "run_tests", lambda *_a, **_k: {"ok": True, "output": "ok"})
 
     out = agent_pipeline.run_multi_agent_task("task", access_level="Autonom", model="gpt-5.4-mini")
-    assert any(e["event_type"] == "approval_required" for e in out["events"])
+    approval = next(e for e in out["events"] if e["event_type"] == "approval_required")
+    assert approval["data"]["patch"]["file_path"] == "x.py"
+    assert "unified_diff" in approval["data"]["patch"]
 
 
 def test_agent_loop_keeps_normal_patch_errors_as_error_events(monkeypatch: pytest.MonkeyPatch) -> None:

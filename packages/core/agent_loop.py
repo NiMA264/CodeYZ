@@ -129,12 +129,18 @@ def run_autonomous_task(
                 add_event(run_id, "patch", f"Iteration {iteration}: patched {file_path}", {"file": file_path, "rollback_id": patch_result.get("rollback_id")})
                 add_event(run_id, "diff", f"Iteration {iteration}: diff for {file_path}", {"diff": patch_result.get("diff", ""), "rollback_id": patch_result.get("rollback_id")})
             except PatchApprovalRequired as exc:
+                patch_payload = {"file_path": file_path}
+                if unified_diff:
+                    patch_payload["unified_diff"] = unified_diff
+                else:
+                    patch_payload["new_content"] = new_content
                 approval_payload = {
                     "file": exc.file_path or file_path,
                     "risk_level": exc.risk_level,
                     "reasons": exc.reasons,
                     "stats": exc.stats,
                     "patch_preview": (exc.patch_text or unified_diff or new_content)[:1000],
+                    "patch": patch_payload,
                 }
                 patch_results.append({"file": file_path, "diff": "", "archive": "", "error": str(exc)})
                 add_event(run_id, "approval_required", "High-risk patch requires approval", approval_payload)

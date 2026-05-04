@@ -37,3 +37,104 @@ def test_task_run_detail_preserves_approval_required_event(monkeypatch) -> None:
     approval = next(e for e in events if e["event_type"] == "approval_required")
     assert approval["title"] == "High-risk patch requires approval"
     assert approval["data"]["risk_level"] == "high"
+
+
+def test_approve_patch_rejects_non_approval_event(monkeypatch) -> None:
+    monkeypatch.setenv("CODEYZ_LOCAL_TOKEN", "token123")
+    run_id = create_run("Task no approval", "gpt-5.4-mini", "Autonom")
+    event = add_event(run_id, "error", "Patch failed", {"error": "x"})
+
+    client = TestClient(app)
+    res = client.post(f"/task/runs/{run_id}/approve-patch/{event['event_id']}", headers={"x-api-key": "token123"})
+    assert res.status_code == 400
+    payload = res.json()
+    assert payload["code"] == "event_not_approvable"
+
+
+def test_approve_patch_applies_exact_stored_patch_and_emits_event(monkeypatch, tmp_path) -> None:
+    from packages.core.project_paths import add_project_path, get_current_project, set_current_project
+
+    monkeypatch.setenv("CODEYZ_LOCAL_TOKEN", "token123")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    old_project = get_current_project()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+    try:
+        target = ws / "a.txt"
+        target.write_text("line1\nline2\nline3\n", encoding="utf-8")
+        diff_text = "@@ -1,3 +1,3 @@\n line1\n-line2\n+line2-approved\n line3"
+
+        run_id = create_run("Task approval apply", "gpt-5.4-mini", "Autonom")
+        event = add_event(
+            run_id,
+            "approval_required",
+            "High-risk patch requires approval",
+            {
+                "file": "a.txt",
+                "risk_level": "high",
+                "reasons": ["high_deletion_ratio"],
+                "stats": {"changed_lines": 40},
+                "patch_preview": diff_text[:120],
+                "patch": {"file_path": "a.txt", "unified_diff": diff_text},
+            },
+        )
+
+        client = TestClient(app)
+        res = client.post(
+            f"/task/runs/{run_id}/approve-patch/{event['event_id']}",
+            headers={"x-api-key": "token123"},
+        )
+        assert res.status_code == 200
+        payload = res.json()
+        assert payload["ok"] is True
+        assert payload["event"]["event_type"] == "approval_applied"
+        assert payload["result"]["rollback_id"]
+        assert "line2-approved" in target.read_text(encoding="utf-8")
+    finally:
+        set_current_project(old_project)
+
+
+def test_approve_patch_failure_emits_error_and_keeps_file(monkeypatch, tmp_path) -> None:
+    from packages.core.project_paths import add_project_path, get_current_project, set_current_project
+
+    monkeypatch.setenv("CODEYZ_LOCAL_TOKEN", "token123")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    old_project = get_current_project()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+    try:
+        target = ws / "b.txt"
+        original = "alpha\nbeta\ngamma\n"
+        target.write_text(original, encoding="utf-8")
+        bad_diff = "@@ -1,3 +1,3 @@\n alpha\n-WRONG\n+beta-updated\n gamma"
+
+        run_id = create_run("Task approval fail", "gpt-5.4-mini", "Autonom")
+        event = add_event(
+            run_id,
+            "approval_required",
+            "High-risk patch requires approval",
+            {
+                "file": "b.txt",
+                "risk_level": "high",
+                "reasons": ["high_deletion_ratio"],
+                "stats": {"changed_lines": 40},
+                "patch_preview": bad_diff[:120],
+                "patch": {"file_path": "b.txt", "unified_diff": bad_diff},
+            },
+        )
+
+        client = TestClient(app)
+        res = client.post(
+            f"/task/runs/{run_id}/approve-patch/{event['event_id']}",
+            headers={"x-api-key": "token123"},
+        )
+        assert res.status_code == 400
+        assert target.read_text(encoding="utf-8") == original
+
+        detail = client.get(f"/task/runs/{run_id}", headers={"x-api-key": "token123"})
+        events = detail.json()["events"]
+        assert any(e["event_type"] == "error" and e["title"] == "Approval apply failed" for e in events)
+    finally:
+        set_current_project(old_project)

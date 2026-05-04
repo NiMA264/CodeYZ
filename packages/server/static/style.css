@@ -94,3 +94,7 @@ textarea { resize: none; min-height: 42px; max-height: 180px; }
 .badge.enabled { color: #c8ffe8; border-color: #2a8f75; background: rgba(16, 163, 127, 0.2); }
 .badge.disabled { color: #c7cedb; border-color: #485164; background: rgba(72, 81, 100, 0.25); }
 .tool-reasoning { margin: 8px 0 0; color: var(--muted); font-size: 0.75rem; line-height: 1.35; }
+
+.approval-actions { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.approval-row { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 12px; }
+
