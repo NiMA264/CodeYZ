@@ -1,27 +1,33 @@
 ﻿from pathlib import Path
+from contextlib import asynccontextmanager
 
 import os
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel
 
 from packages.core.agent import ask
+from packages.core.automations_store import initialize_automations_storage
 from packages.core.context_manager import (
     build_chat_context,
     list_pinned_files,
     pin_file,
     unpin_file,
 )
+from packages.core.context_policy import should_attach_code_context
 from packages.core.indexer import build_index, index_status, search_files
 from packages.core.permissions import READ_ONLY
 from packages.core.plugins import list_plugins, load_plugins, register_plugin
 from packages.core.project_paths import get_current_project
 from packages.core.sessions import add_message, create_session
+from packages.core.sessions import initialize_sessions_storage
 from packages.core.workspace_context import build_workspace_context
 from packages.server.auth import require_auth
+from packages.server.errors import error_payload, raise_api_error
 from packages.server.routes_automation import router as automations_router
 from packages.server.routes_plugins import router as plugins_router
 from packages.server.routes_projects import router as projects_router
@@ -29,7 +35,14 @@ from packages.server.routes_rollback import router as rollback_router
 from packages.server.routes_task import router as task_router
 from packages.tools.git import git_diff, git_status
 
-app = FastAPI(title="CodeYZ Local Server", version="0.3.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    initialize_sessions_storage()
+    initialize_automations_storage()
+    yield
+
+
+app = FastAPI(title="CodeYZ Local Server", version="0.3.0", lifespan=lifespan)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 PLUGIN_DIR = Path(__file__).resolve().parents[2] / "plugins"
 VERSION_FILE = Path(__file__).resolve().parents[2] / "VERSION"
@@ -40,6 +53,39 @@ ALLOWED_MODES = {"Chat", "Code", "Review", "Fix", "Projekt planen"}
 ALLOWED_ACCESS = {"Nur lesen", "Dateien ändern", "Tests ausführen", "Autonom", "Gefährlich deaktiviert"}
 
 app.mount("/ui", StaticFiles(directory=STATIC_DIR, html=True), name="ui")
+
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_request: Request, exc: HTTPException):  # type: ignore[override]
+    detail = exc.detail
+    if isinstance(detail, dict) and {"ok", "code", "message", "hint"}.issubset(detail.keys()):
+        payload = detail
+    else:
+        payload = error_payload(
+            code=f"http_{exc.status_code}",
+            message=str(detail) if detail else "Request failed",
+            hint="Check request parameters or permissions.",
+        )
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(status_code=exc.status_code, content=payload)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(
+    _request: Request, exc: RequestValidationError
+):  # type: ignore[override]
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=422,
+        content=error_payload(
+            code="validation_error",
+            message="Request validation failed",
+            hint=str(exc.errors()[:2]),
+        ),
+    )
 
 
 class ChatRequest(BaseModel):
@@ -63,12 +109,6 @@ def _ping_handler(input_data: dict | None = None) -> dict[str, str]:
     return {"status": "ok"}
 
 
-def _needs_workspace_context(message: str) -> bool:
-    lowered = message.lower()
-    triggers = ["workspace", "projekt", "project", "analysiere", "analyze", "codeyz"]
-    return any(token in lowered for token in triggers)
-
-
 def _resolve_file_in_current_project(rel_path: str) -> Path:
     root = Path(get_current_project()).resolve()
     target = (root / rel_path).resolve()
@@ -85,11 +125,11 @@ def _resolve_file_in_current_project(rel_path: str) -> Path:
 
 def _validate_chat_options(payload: ChatRequest) -> None:
     if payload.model and payload.model not in ALLOWED_MODELS:
-        raise HTTPException(status_code=400, detail="Unsupported model")
+        raise_api_error(400, "unsupported_model", "Unsupported model", "Use one of: gpt-5.4-mini, gpt-5.4, gpt-5.5.")
     if payload.mode and payload.mode not in ALLOWED_MODES:
-        raise HTTPException(status_code=400, detail="Unsupported mode")
+        raise_api_error(400, "unsupported_mode", "Unsupported mode", "Use a supported composer mode.")
     if payload.access_level and payload.access_level not in ALLOWED_ACCESS:
-        raise HTTPException(status_code=400, detail="Unsupported access level")
+        raise_api_error(400, "unsupported_access_level", "Unsupported access level", "Use one of the configured access levels.")
 
 
 def _access_rules_hint(access_level: str | None) -> str:
@@ -198,7 +238,7 @@ def add_pinned_context(payload: PinnedFileRequest) -> dict[str, list[str]]:
     try:
         pin_file(payload.path)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise_api_error(400, "invalid_pinned_file", str(exc), "Pin only files inside the current workspace.")
     return {"pinned_files": list_pinned_files()}
 
 
@@ -214,9 +254,9 @@ def read_file_preview(path: str = Query(..., min_length=1)) -> dict[str, str]:
         target = _resolve_file_in_current_project(path)
         content = target.read_text(encoding="utf-8")
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise_api_error(400, "invalid_file_path", str(exc), "Use a relative path inside the current workspace.")
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Could not read file: {exc}") from exc
+        raise_api_error(400, "file_read_failed", f"Could not read file: {exc}", "Check file encoding and permissions.")
 
     if len(content) > 12000:
         content = content[:12000] + "\n\n[TRUNCATED]"
@@ -235,25 +275,33 @@ def chat(payload: ChatRequest) -> dict[str, str]:
     force_plan_mode = bool(payload.plan_mode) or access_level == READ_ONLY
 
     full_context = payload.context or ""
+    pinned = list_pinned_files()
+    attach_code_context = should_attach_code_context(
+        payload.message,
+        payload.mode,
+        selected_file=payload.selected_file,
+        pinned_count=len(pinned),
+    )
 
-    try:
-        pin_context = build_chat_context(
-            payload.selected_file,
-            list_pinned_files(),
-            query=payload.message,
-            max_chars=12000,
-        )
-        if pin_context:
-            full_context = f"{full_context}\n\nPinned/selected context:\n{pin_context}".strip()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if attach_code_context:
+        try:
+            pin_context = build_chat_context(
+                payload.selected_file,
+                pinned,
+                query=payload.message,
+                max_chars=12000,
+            )
+            if pin_context:
+                full_context = f"{full_context}\n\nPinned/selected context:\n{pin_context}".strip()
+        except ValueError as exc:
+            raise_api_error(400, "context_build_failed", str(exc), "Check selected/pinned files for workspace boundaries.")
 
     if payload.attachments_metadata:
         full_context = f"{full_context}\n\nAttachments metadata:\n{payload.attachments_metadata}".strip()
 
     full_context = f"{full_context}\n\n{_access_rules_hint(access_level)}".strip()
 
-    if _needs_workspace_context(payload.message):
+    if attach_code_context:
         workspace_context = build_workspace_context()
         full_context = f"{full_context}\n\nWorkspace context:\n{workspace_context}".strip()
 
@@ -278,4 +326,6 @@ def git_status_route() -> dict[str, str]:
 @app.get("/git/diff", dependencies=[Depends(require_auth)])
 def git_diff_route() -> dict[str, str]:
     return {"diff": git_diff()}
+
+
 

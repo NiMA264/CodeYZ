@@ -12,13 +12,18 @@ dependencies = [
     "rich",
     "fastapi",
     "uvicorn",
-    "pytest",
-    "httpx",
-    "ruff",
 ]
 
 [project.scripts]
 codeyz = "packages.cli.main:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+    "ruff",
+    "playwright",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

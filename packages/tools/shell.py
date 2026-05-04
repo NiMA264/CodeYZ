@@ -10,6 +10,7 @@ BLOCKED_PATTERNS = [
     "format",
     "shutdown",
     "sudo",
+    "git commit",
     "git push --force",
     "git push",
     "deploy",
@@ -29,15 +30,17 @@ def _is_pipe_shell_install(lowered: str) -> bool:
     return bool(re.search(r"\b(curl|wget)\b.*\|\s*sh\b", lowered))
 
 
-def run_shell(command: str, cwd: str = ".", timeout: int = 120) -> str:
+def assert_safe_command(command: str, allow_sensitive: bool = False) -> None:
     lowered = command.lower()
-
-    if _is_pipe_shell_install(lowered):
+    if _is_pipe_shell_install(lowered) and not allow_sensitive:
         raise ValueError("Blocked dangerous command: curl/wget pipe to sh")
-
     for pattern in BLOCKED_PATTERNS:
-        if pattern in lowered:
+        if pattern in lowered and not allow_sensitive:
             raise ValueError(f"Blocked dangerous command: {pattern}")
+
+
+def run_shell(command: str, cwd: str = ".", timeout: int = 120, allow_sensitive: bool = False) -> str:
+    assert_safe_command(command, allow_sensitive=allow_sensitive)
 
     result = subprocess.run(
         command,

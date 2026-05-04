@@ -38,7 +38,7 @@ def planner(task: str, context: str, model: str | None = None) -> dict:
 
 
 def coder(plan: str, context: str, model: str | None = None) -> dict:
-    system = "You are Coder. Return JSON only with patches [{file_path,new_content}]."
+    system = "You are Coder. Return JSON only with patches [{file_path,unified_diff}] and fallback [{file_path,new_content}] if needed."
     raw = _run("coder", system, f"Plan:\n{plan}\n\nContext:\n{context}", fallback_model=model)
     raw["json"] = _extract_json(raw["output"])
     return raw
@@ -55,7 +55,7 @@ def reviewer(diff: str, context: str, model: str | None = None) -> dict:
 
 
 def fixer(errors: str, context: str, model: str | None = None) -> dict:
-    system = "You are Fixer. Return JSON only with patches [{file_path,new_content}]."
+    system = "You are Fixer. Return JSON only with patches [{file_path,unified_diff}] and fallback [{file_path,new_content}] if needed."
     raw = _run("fixer", system, f"Errors:\n{errors}\n\nContext:\n{context}", fallback_model=model)
     raw["json"] = _extract_json(raw["output"])
     return raw

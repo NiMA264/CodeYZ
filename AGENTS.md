@@ -48,3 +48,20 @@ Build CodeYZ: a local coding agent similar to Codex using OpenAI API.
 * Be concise
 * Show only necessary code
 * Prefer diffs
+
+## Architecture Notes
+
+* Workspace-based file access via current project path
+* Multiple projects supported via allowlist
+* All file operations must respect workspace boundary
+* Context builder and tools must use same path model
+
+## Execution
+
+* Code execution may run locally or via Docker (preferred)
+* Sandbox model should be enforced for safety
+
+## Patching
+
+* Prefer unified diffs over full file replacement
+* Full rewrites only if explicitly required

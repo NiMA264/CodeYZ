@@ -65,10 +65,10 @@ def set_current_project(path: str) -> str:
 
 def ensure_allowed_path(path: str) -> Path:
     target = _normalize(path)
-    for allowed in _PROJECT_PATHS:
-        if _is_within(target, allowed):
-            return target
-    raise ValueError("Path is not in allowed project paths")
+    current = _CURRENT_PROJECT_PATH.resolve()
+    if _is_within(target, current):
+        return target
+    raise ValueError("Path is outside current project")
 
 
 # initialize defaults

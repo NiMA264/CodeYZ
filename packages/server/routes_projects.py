@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, HTTPException
+﻿from fastapi import APIRouter
 from pydantic import BaseModel
 
 from packages.core.file_tree import build_file_tree
@@ -9,6 +9,7 @@ from packages.core.project_paths import (
     list_project_paths,
     set_current_project,
 )
+from packages.server.errors import raise_api_error
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -28,7 +29,7 @@ def create_project(payload: ProjectCreateRequest) -> dict[str, str]:
         added = add_project_path(payload.path.strip())
         return {"added": added}
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise_api_error(400, "invalid_project_path", str(exc), "Provide an existing directory path.")
 
 
 @router.get("/current")
@@ -42,7 +43,7 @@ def set_current_project_route(payload: ProjectCreateRequest) -> dict[str, str]:
         current = set_current_project(payload.path.strip())
         return {"current": current}
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise_api_error(400, "invalid_current_project", str(exc), "Project must be in allowed projects list.")
 
 
 @router.get("/tree")
@@ -52,4 +53,4 @@ def get_project_tree() -> dict:
         allowed_root = ensure_allowed_path(current)
         return build_file_tree(str(allowed_root))
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise_api_error(400, "project_tree_failed", str(exc), "Set a valid current project first.")

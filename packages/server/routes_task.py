@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, HTTPException, status
+﻿from fastapi import APIRouter, status
 from pydantic import BaseModel
 
 from packages.core.agent_loop import run_autonomous_task
@@ -6,6 +6,7 @@ from packages.core.loop import run_task
 from packages.core.model_router import set_role_models
 from packages.core.permissions import can_run_autonomous
 from packages.core.task_runs import get_run, list_runs
+from packages.server.errors import raise_api_error
 
 router = APIRouter(prefix="/task", tags=["task"])
 
@@ -30,12 +31,14 @@ def task_auto(payload: TaskRequest) -> dict:
         try:
             set_role_models(payload.role_models)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise_api_error(400, "invalid_role_models", str(exc), "Use only allowed model names per role.")
 
     if not can_run_autonomous(payload.access_level):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied: /task/auto requires access level 'Autonom'",
+        raise_api_error(
+            status.HTTP_403_FORBIDDEN,
+            "autonomous_access_denied",
+            "Access denied: /task/auto requires access level 'Autonom'",
+            "Set access level to 'Autonom' in Composer or request payload.",
         )
     return run_autonomous_task(
         payload.task,
@@ -55,5 +58,5 @@ def task_runs() -> dict:
 def task_run_by_id(run_id: str) -> dict:
     run = get_run(run_id)
     if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise_api_error(404, "run_not_found", "Run not found", "List runs via GET /task/runs first.")
     return run

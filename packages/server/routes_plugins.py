@@ -1,6 +1,6 @@
 ﻿from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from packages.core.plugins import (
@@ -10,6 +10,7 @@ from packages.core.plugins import (
     list_plugins,
     load_plugins,
 )
+from packages.server.errors import raise_api_error
 
 router = APIRouter(prefix="/plugins", tags=["plugins"])
 PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugins"
@@ -36,7 +37,7 @@ def enable_plugin_route(payload: PluginNameRequest) -> dict[str, str]:
     try:
         enable_plugin(payload.name)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise_api_error(404, "plugin_not_found", str(exc), "Check the plugin name via GET /plugins.")
     return {"status": "enabled", "name": payload.name}
 
 
@@ -45,7 +46,7 @@ def disable_plugin_route(payload: PluginNameRequest) -> dict[str, str]:
     try:
         disable_plugin(payload.name)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise_api_error(404, "plugin_not_found", str(exc), "Check the plugin name via GET /plugins.")
     return {"status": "disabled", "name": payload.name}
 
 
@@ -54,9 +55,9 @@ def run_plugin_route(payload: PluginRunRequest) -> dict:
     try:
         result = call_plugin(payload.name, payload.input_data, access_level=payload.access_level)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise_api_error(404, "plugin_not_found", str(exc), "Check the plugin name via GET /plugins.")
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise_api_error(403, "plugin_permission_denied", str(exc), "Increase access level if this action is intended.")
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Plugin execution failed: {exc}") from exc
+        raise_api_error(400, "plugin_execution_failed", f"Plugin execution failed: {exc}", "Inspect plugin input and permissions.")
     return {"plugin": payload.name, "result": result}

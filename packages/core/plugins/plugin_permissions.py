@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from packages.core.permissions import can_run_tests, can_write_files
 

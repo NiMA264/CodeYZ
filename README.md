@@ -63,6 +63,8 @@ User config and runtime files are stored in:
 - `runs/`
 - `snapshots/`
 - `diffs/`
+- `sessions.json`
+- `automations.json`
 
 ## Features
 
@@ -88,6 +90,15 @@ User config and runtime files are stored in:
 - Server unreachable: start with `codeyz server`
 - Plugin error: check plugin panel, disable/enable plugin
 - Budget exceeded: raise budget or split task
+- API error codes: see `docs/api-error-codes.md`
+
+## UI Smoke-Test
+
+- Minimaler UI-Smoke-Test ist in `tests/test_ui_smoke.py`.
+- Enthält:
+  - `/ui/` erreichbar und HTML-Module-Wiring korrekt
+  - zentrale UI-Elemente vorhanden (`chat-form`, `messages`, `explorer`, `runs-list`, `plugins-list`)
+  - optionaler echter Browser-Init-Check mit Playwright (wird automatisch übersprungen, wenn Playwright nicht installiert ist)
 
 ## Version
 

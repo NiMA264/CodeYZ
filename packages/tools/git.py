@@ -9,5 +9,7 @@ def git_diff() -> str:
     return run_shell("git diff -- .")
 
 
-def git_commit(message: str) -> str:
-    return run_shell(f'git commit -m "{message}"')
+def git_commit(message: str, approved: bool = False) -> str:
+    if not approved:
+        raise PermissionError("Commit blocked: explicit approval required (approved=True).")
+    return run_shell(f'git commit -m "{message}"', allow_sensitive=True)

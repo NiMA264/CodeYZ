@@ -39,10 +39,7 @@ def check_environment() -> list[str]:
 
 
 def check_dependencies() -> list[str]:
-    frozen = bool(getattr(sys, "frozen", False))
     required = ["openai", "fastapi", "typer", "rich", "uvicorn"]
-    if not frozen:
-        required.append("pytest")
 
     lines: list[str] = []
     for mod in required:

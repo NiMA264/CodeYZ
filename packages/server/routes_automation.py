@@ -1,13 +1,9 @@
-﻿from threading import Lock
-from uuid import uuid4
-
-from fastapi import APIRouter
+﻿from fastapi import APIRouter
 from pydantic import BaseModel
 
-router = APIRouter(prefix="/automations", tags=["automations"])
+from packages.core.automations_store import create_automation, list_automations
 
-_AUTOMATIONS: list[dict[str, str]] = []
-_LOCK = Lock()
+router = APIRouter(prefix="/automations", tags=["automations"])
 
 
 class AutomationCreateRequest(BaseModel):
@@ -18,18 +14,13 @@ class AutomationCreateRequest(BaseModel):
 
 @router.get("")
 def get_automations() -> dict[str, list[dict[str, str]]]:
-    with _LOCK:
-        return {"automations": list(_AUTOMATIONS)}
+    return {"automations": list_automations()}
 
 
 @router.post("")
-def create_automation(payload: AutomationCreateRequest) -> dict[str, str]:
-    item = {
-        "id": uuid4().hex,
-        "name": payload.name,
-        "prompt": payload.prompt,
-        "schedule": payload.schedule,
-    }
-    with _LOCK:
-        _AUTOMATIONS.append(item)
-    return item
+def create_automation_route(payload: AutomationCreateRequest) -> dict[str, str]:
+    return create_automation(
+        name=payload.name,
+        prompt=payload.prompt,
+        schedule=payload.schedule,
+    )

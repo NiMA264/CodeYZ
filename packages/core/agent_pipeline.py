@@ -4,7 +4,7 @@ from packages.core.agents import coder, fixer, planner, reviewer, tester
 from packages.core.costs import BudgetCheck
 from packages.core.executor import run_build, run_tests, summarize_errors
 from packages.core.indexer import search_files
-from packages.core.patcher import apply_patch
+from packages.core.patcher import PatchApprovalRequired, apply_patch, apply_unified_diff
 from packages.core.plugins import call_plugin
 from packages.core.permissions import (
     assert_can_run_autonomous,
@@ -36,16 +36,37 @@ def _normalize_role_output(raw, role: str, default_model: str | None) -> dict:
     return out
 
 
-def _apply_patches(patches: list[dict], access_level: str | None) -> list[dict]:
+def _apply_patches(patches: list[dict], access_level: str | None, run_id: str | None = None, iteration: int | None = None) -> list[dict]:
     out: list[dict] = []
     for patch in patches[:3]:
         file_path = str(patch.get("file_path", "")).strip()
+        unified_diff = str(patch.get("unified_diff", "")).strip()
         new_content = str(patch.get("new_content", ""))
         if not file_path:
             continue
         try:
-            result = apply_patch(file_path, new_content, access_level=access_level)
+            if unified_diff:
+                result = apply_unified_diff(file_path, unified_diff, access_level=access_level)
+            else:
+                result = apply_patch(file_path, new_content, access_level=access_level)
             out.append(result)
+        except PatchApprovalRequired as exc:
+            if run_id is not None:
+                _add_cost_event(
+                    run_id,
+                    "approval_required",
+                    "High-risk patch requires approval",
+                    {
+                        "file": exc.file_path or file_path,
+                        "risk_level": exc.risk_level,
+                        "reasons": exc.reasons,
+                        "stats": exc.stats,
+                        "patch_preview": (exc.patch_text or unified_diff or new_content)[:1000],
+                        "iteration": iteration or 0,
+                    },
+                    "coder",
+                )
+            out.append({"file": file_path, "error": str(exc), "diff": "", "archive": "", "rollback_id": ""})
         except Exception as exc:
             out.append({"file": file_path, "error": str(exc), "diff": "", "archive": "", "rollback_id": ""})
     return out
@@ -147,7 +168,7 @@ def run_multi_agent_task(
 
         patch_results: list[dict] = []
         if can_write_files(access_level):
-            patch_results = _apply_patches(code_meta.get("json", {}).get("patches", []), access_level)
+            patch_results = _apply_patches(code_meta.get("json", {}).get("patches", []), access_level, run_id=run_id, iteration=i)
             for p in patch_results:
                 _add_cost_event(run_id, "diff", f"Iteration {i}: diff {p.get('file', '')}", {"diff": p.get("diff", ""), "rollback_id": p.get("rollback_id", "")}, "coder")
         iteration["patches"] = patch_results
@@ -191,7 +212,7 @@ def run_multi_agent_task(
         _add_cost_event(run_id, "fix", f"Iteration {i}: fixer", fixer_meta, "fixer")
 
         if can_write_files(access_level):
-            fix_results = _apply_patches(fixer_meta.get("json", {}).get("patches", []), access_level)
+            fix_results = _apply_patches(fixer_meta.get("json", {}).get("patches", []), access_level, run_id=run_id, iteration=i)
             iteration.setdefault("patches", []).extend(fix_results)
 
         iteration["status"] = "needs_fix"
