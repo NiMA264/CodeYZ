@@ -1,4 +1,5 @@
 ﻿import { apiGet } from "./api.js";
+import { formatTimelineEvent } from "./event_format.js";
 import { els, state } from "./state.js";
 
 function setDecisionBadge(el, enabled) {
@@ -38,8 +39,7 @@ export function renderRuns(runs) {
       }
       lines.push("Events:");
       for (const event of detail.events || []) {
-        lines.push(`- [${event.event_type}] (${event.agent_role || "-"}) ${event.title}`);
-        if (event.data) lines.push(`  ${JSON.stringify(event.data, null, 2)}`);
+        for (const row of formatTimelineEvent(event)) lines.push(row);
       }
       els.runReplayContentEl.textContent = lines.join("\n");
     });
