@@ -19,6 +19,16 @@ body { margin: 0; font-family: "Segoe UI", "Noto Sans", sans-serif; background: 
 .explorer-pane { border-left: 1px solid var(--border); }
 
 .sidebar h1 { margin: 0 0 10px; font-size: 1.05rem; }
+.brand { margin-bottom: 10px; }
+.brand-logo {
+  display: block;
+  width: 100%;
+  max-width: 220px;
+  height: auto;
+  max-height: 120px;
+  object-fit: contain;
+  margin: 0 0 8px;
+}
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px; margin-top: 8px; }
 .fixed-panel h2, .panel h2 { margin: 0 0 6px; font-size: 0.85rem; }
 

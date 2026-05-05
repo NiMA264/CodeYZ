@@ -12,6 +12,18 @@ from fastapi.testclient import TestClient
 from packages.server.app import app
 
 
+def _is_missing_playwright_browser(exc: Exception) -> bool:
+    message = str(exc).lower()
+    markers = (
+        "executable doesn't exist",
+        "please run the following command to download new browsers",
+        "playwright install",
+        "browser binaries",
+        "chrome-headless-shell",
+    )
+    return any(marker in message for marker in markers)
+
+
 def test_ui_route_and_module_wiring() -> None:
     client = TestClient(app)
     response = client.get("/ui/")
@@ -31,6 +43,7 @@ def test_ui_route_and_module_wiring() -> None:
     reason="playwright is not installed; run with `pip install -e .[dev]`",
 )
 def test_ui_initializes_without_browser_errors() -> None:
+    from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import sync_playwright
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -70,7 +83,15 @@ def test_ui_initializes_without_browser_errors() -> None:
 
         page_errors: list[str] = []
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            try:
+                browser = p.chromium.launch(headless=True)
+            except PlaywrightError as exc:
+                if _is_missing_playwright_browser(exc):
+                    pytest.skip(
+                        "playwright browser binaries are not installed; "
+                        "run `playwright install` to enable UI smoke test"
+                    )
+                raise
             page = browser.new_page()
             page.on("pageerror", lambda exc: page_errors.append(str(exc)))
             page.goto(f"http://127.0.0.1:{port}/ui/", wait_until="domcontentloaded")
