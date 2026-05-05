@@ -924,6 +924,30 @@ function executePaletteSelection() {
   closeCommandPalette();
 }
 
+function shortcutHelpIsOpen() {
+  const overlay = document.getElementById("shortcut-help-overlay");
+  return !!overlay && !overlay.classList.contains("hidden");
+}
+
+function openShortcutHelp() {
+  const overlay = document.getElementById("shortcut-help-overlay");
+  if (!overlay) return;
+  overlay.classList.remove("hidden");
+}
+
+function closeShortcutHelp() {
+  const overlay = document.getElementById("shortcut-help-overlay");
+  if (!overlay) return;
+  overlay.classList.add("hidden");
+}
+
+function bindShortcutHelpOverlay() {
+  const closeBtn = document.getElementById("shortcut-help-close");
+  const backdrop = document.getElementById("shortcut-help-backdrop");
+  if (closeBtn) closeBtn.addEventListener("click", closeShortcutHelp);
+  if (backdrop) backdrop.addEventListener("click", closeShortcutHelp);
+}
+
 function runUndo() {
   if (!undoStack.length) return;
   const action = undoStack.pop();
@@ -960,6 +984,14 @@ function isEditableTarget(target) {
 
 function bindKeyboardShortcuts() {
   window.addEventListener("keydown", (event) => {
+    if (shortcutHelpIsOpen()) {
+      if (String(event.key || "").toLowerCase() === "escape") {
+        event.preventDefault();
+        closeShortcutHelp();
+      }
+      return;
+    }
+
     if (paletteIsOpen()) {
       const key = String(event.key || "").toLowerCase();
       if (key === "escape") {
@@ -989,6 +1021,11 @@ function bindKeyboardShortcuts() {
     if (isEditableTarget(event.target)) return;
 
     const key = String(event.key || "").toLowerCase();
+    if (key === "/") {
+      event.preventDefault();
+      openShortcutHelp();
+      return;
+    }
     if (key === "z" && event.shiftKey) {
       event.preventDefault();
       runRedo();
@@ -1352,6 +1389,7 @@ export function initUi() {
   initCollapsibles();
   initResizablePanels();
   bindEvents();
+  bindShortcutHelpOverlay();
   bindKeyboardShortcuts();
   bindOnboardingHint(isFirstLoadWithoutPreferences);
   applyFocusMode(readPreferences().mode || "workflow", false);

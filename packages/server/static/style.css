@@ -277,3 +277,50 @@ textarea { resize: none; min-height: 42px; max-height: 180px; }
   color: #d8f7ec;
 }
 
+.shortcut-help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 33;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.shortcut-help-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 8, 11, 0.56);
+}
+.shortcut-help-panel {
+  position: relative;
+  width: min(420px, 92vw);
+  background: rgba(18, 22, 31, 0.98);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+  padding: 12px;
+}
+.shortcut-help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.shortcut-help-head h3 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+.shortcut-help-list {
+  margin: 0 0 8px 18px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  color: #d0d8e7;
+  font-size: 0.8rem;
+}
+.shortcut-help-foot {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
