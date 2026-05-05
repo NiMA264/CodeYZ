@@ -123,6 +123,27 @@ User config and runtime files are stored in:
   - optionaler echter Browser-Init-Check mit Playwright (wird automatisch übersprungen, wenn Playwright nicht installiert ist)
 - CI läuft standardmäßig ohne Browser-Binaries; ein separater optionaler Browser-Job kann manuell per `workflow_dispatch` gestartet werden.
 
+## Web UI Features
+
+- Workflow-Karte mit Run-Summary (Task, Patch, Tests, Risk, Decision)
+- Focus Modes: `Workflow`, `Code`, `Chat`
+- Command Palette: `Ctrl+K`
+- Keyboard Shortcuts:
+  - `Ctrl+1` / `Ctrl+2` / `Ctrl+3` für Focus Modes
+  - `Ctrl+B` Sidebar ein-/ausblenden
+  - `Ctrl+E` Explorer ein-/ausblenden
+  - `Ctrl+Z` Undo, `Ctrl+Shift+Z` Redo
+- Layout:
+  - Panels sind einklappbar (collapsible)
+  - Sidebars sind resizable (Drag + persistente Breite)
+  - UI-Preferences werden zentral persistiert (`codeyz_ui_preferences`)
+  - Layout kann exportiert/importiert werden
+  - Session Restore stellt letzten UI-Zustand wieder her
+- Timeline:
+  - Event-Gruppierung mit Expand/Collapse für Details
+  - Virtual Scrolling für große Run-Listen
+- Details: siehe `docs/ui.md`
+
 ## Version
 
 Current version is stored in `VERSION` and exposed in `/health` and UI.
