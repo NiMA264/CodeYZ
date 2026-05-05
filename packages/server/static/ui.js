@@ -5,6 +5,36 @@ import { refreshPlugins } from "./plugins.js";
 import { ACCESS_KEY, els, MODEL_KEY, MODE_KEY, PLAN_KEY, scrollChatToBottom, state, TOKEN_KEY } from "./state.js";
 import { refreshRollbacks, refreshRuns } from "./timeline.js";
 
+const COLLAPSE_KEY_PREFIX = "codeyz_ui_collapsed_";
+
+function collapseStorageKey(panelId) {
+  return `${COLLAPSE_KEY_PREFIX}${panelId}`;
+}
+
+function applyCollapsedState(panel, collapsed) {
+  panel.classList.toggle("collapsed", collapsed);
+  const toggle = panel.querySelector("[data-collapse-toggle]");
+  if (toggle) toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+}
+
+function initCollapsibles() {
+  const panels = Array.from(document.querySelectorAll("[data-collapsible][data-panel-id]"));
+  for (const panel of panels) {
+    const panelId = panel.getAttribute("data-panel-id");
+    if (!panelId) continue;
+    const saved = localStorage.getItem(collapseStorageKey(panelId));
+    applyCollapsedState(panel, saved === "1");
+    const toggle = panel.querySelector("[data-collapse-toggle]");
+    if (!toggle) continue;
+    toggle.addEventListener("click", () => {
+      const collapsed = !panel.classList.contains("collapsed");
+      applyCollapsedState(panel, collapsed);
+      localStorage.setItem(collapseStorageKey(panelId), collapsed ? "1" : "0");
+    });
+  }
+}
+
+
 function renderPinnedList() {
   els.pinnedListEl.innerHTML = "";
   els.pinnedCountEl.textContent = `Pinned: ${state.pinnedFiles.length}`;
@@ -257,6 +287,7 @@ export function initUi() {
   setSelectedFile("");
   autoResizeTextarea();
   renderAttachments();
+  initCollapsibles();
   bindEvents();
   addMessage("assistant", "CodeYZ UI bereit.");
   scrollChatToBottom();
