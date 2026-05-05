@@ -853,6 +853,35 @@ function renderCommandPalette() {
     return;
   }
 
+  if (!query) {
+    const popularLabel = document.createElement("div");
+    popularLabel.className = "command-group-label";
+    popularLabel.textContent = "Popular commands";
+    els.commandListEl.appendChild(popularLabel);
+
+    const popularItems = [
+      "Switch to Workflow Mode",
+      "Toggle Explorer",
+      "Open Timeline",
+    ];
+    for (const text of popularItems) {
+      const hint = document.createElement("div");
+      hint.className = "command-help-item";
+      hint.textContent = text;
+      els.commandListEl.appendChild(hint);
+    }
+
+    const shortcutLabel = document.createElement("div");
+    shortcutLabel.className = "command-group-label";
+    shortcutLabel.textContent = "Shortcuts";
+    els.commandListEl.appendChild(shortcutLabel);
+
+    const shortcuts = document.createElement("div");
+    shortcuts.className = "command-help-item";
+    shortcuts.textContent = "Ctrl+K, Ctrl+1/2/3, Ctrl+B, Ctrl+E, Ctrl+Z, Ctrl+Shift+Z";
+    els.commandListEl.appendChild(shortcuts);
+  }
+
   let recentDividerShown = false;
   let otherDividerShown = false;
   filteredCommandActions.forEach((item, idx) => {

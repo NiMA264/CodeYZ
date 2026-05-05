@@ -324,3 +324,12 @@ textarea { resize: none; min-height: 42px; max-height: 180px; }
   font-size: 0.75rem;
 }
 
+.command-help-item {
+  font-size: 0.76rem;
+  color: #bcc7d9;
+  border: 1px solid rgba(64, 80, 106, 0.5);
+  border-radius: 8px;
+  background: rgba(20, 26, 37, 0.6);
+  padding: 6px 8px;
+}
+
