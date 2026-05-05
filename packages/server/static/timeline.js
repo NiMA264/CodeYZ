@@ -229,27 +229,80 @@ function renderApprovalActions(events) {
   }
 }
 
-export function renderRuns(runs) {
+function computeVisibleRange() {
+  const total = allRuns.length;
+  const viewport = els.runsListEl?.clientHeight || 180;
+  const scrollTop = els.runsListEl?.scrollTop || 0;
+  const visibleCount = Math.max(1, Math.ceil(viewport / RUN_ROW_HEIGHT));
+  const start = Math.max(0, Math.floor(scrollTop / RUN_ROW_HEIGHT) - RUN_BUFFER);
+  const end = Math.min(total, start + visibleCount + RUN_BUFFER * 2);
+  return { start, end };
+}
+
+function buildRunButton(run) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "run-item";
+  const task = String(run.task || "").trim();
+  btn.textContent = `${run.status} · ${(task || "Task").slice(0, 40)}`;
+  btn.addEventListener("click", async () => {
+    writePrefs({ session: { lastRunId: run.run_id } });
+    await openRun(run.run_id);
+  });
+  return btn;
+}
+
+function renderRunsWindow() {
+  if (!els.runsListEl) return;
+  const { start, end } = computeVisibleRange();
+  if (start === visibleRange.start && end === visibleRange.end && els.runsListEl.childElementCount > 0) {
+    return;
+  }
+  visibleRange = { start, end };
+
+  const fragment = document.createDocumentFragment();
+  const top = document.createElement("div");
+  top.className = "run-spacer";
+  top.style.height = `${start * RUN_ROW_HEIGHT}px`;
+  fragment.appendChild(top);
+
+  for (const run of allRuns.slice(start, end)) {
+    fragment.appendChild(buildRunButton(run));
+  }
+
+  const bottom = document.createElement("div");
+  bottom.className = "run-spacer";
+  bottom.style.height = `${Math.max(0, (allRuns.length - end) * RUN_ROW_HEIGHT)}px`;
+  fragment.appendChild(bottom);
+
   els.runsListEl.innerHTML = "";
+  els.runsListEl.appendChild(fragment);
+}
+
+function scheduleVirtualRender() {
+  if (pendingVirtualFrame) return;
+  pendingVirtualFrame = requestAnimationFrame(() => {
+    pendingVirtualFrame = 0;
+    renderRunsWindow();
+  });
+}
+
+function ensureVirtualScrollBinding() {
+  if (!els.runsListEl || els.runsListEl.dataset.virtualBound === "1") return;
+  els.runsListEl.dataset.virtualBound = "1";
+  els.runsListEl.addEventListener("scroll", scheduleVirtualRender, { passive: true });
+}
+
+export function renderRuns(runs) {
+  const signature = JSON.stringify((runs || []).slice(0, 60).map((r) => [r.run_id, r.status, r.task]));
+  if (signature === lastRenderedRunIds && els.runsListEl.childElementCount > 0) return;
+  lastRenderedRunIds = signature;
+  allRuns = Array.isArray(runs) ? runs.slice(0, 500) : [];
+  visibleRange = { start: -1, end: -1 };
+  ensureVirtualScrollBinding();
   const firstRun = Array.isArray(runs) && runs.length > 0 ? runs[0] : null;
   renderWorkflowCard(firstRun ? { run_id: firstRun.run_id, status: firstRun.status, task: firstRun.task, events: [] } : null);
-
-  for (const run of runs.slice(0, 12)) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "run-item";
-    const task = String(run.task || "").trim();
-    btn.textContent = `${run.status} · ${(task || "Task").slice(0, 40)}`;
-    btn.addEventListener("click", async () => {
-      state.selectedRunId = run.run_id;
-      const detail = await apiGet(`/task/runs/${encodeURIComponent(run.run_id)}`);
-      renderWorkflowCard(detail);
-      renderToolDecision(detail.events || []);
-      renderApprovalActions(detail.events || []);
-      renderReplay(detail);
-    });
-    els.runsListEl.appendChild(btn);
-  }
+  renderRunsWindow();
 }
 
 export function renderRollbacks(items) {
