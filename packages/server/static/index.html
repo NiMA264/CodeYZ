@@ -98,6 +98,21 @@
     </aside>
 
     <section class="chat-area">
+      <section id="workflow-card" class="workflow-card" aria-live="polite">
+        <div class="workflow-head">
+          <h2>Workflow</h2>
+          <span id="workflow-run-state" class="workflow-run-state">Kein Run ausgewählt</span>
+        </div>
+        <div id="workflow-phases" class="workflow-phases">
+          <div class="workflow-phase"><span>Task</span><span id="wf-task" class="phase-badge pending">pending</span></div>
+          <div class="workflow-phase"><span>Plan</span><span id="wf-plan" class="phase-badge pending">pending</span></div>
+          <div class="workflow-phase"><span>Patch</span><span id="wf-patch" class="phase-badge pending">pending</span></div>
+          <div class="workflow-phase"><span>Tests</span><span id="wf-tests" class="phase-badge pending">pending</span></div>
+          <div class="workflow-phase"><span>Diff</span><span id="wf-diff" class="phase-badge pending">pending</span></div>
+          <div class="workflow-phase"><span>Approval</span><span id="wf-approval" class="phase-badge pending">pending</span></div>
+        </div>
+      </section>
+
       <section id="messages" class="messages" aria-live="polite"></section>
 
       <div id="attachments" class="attachments"></div>

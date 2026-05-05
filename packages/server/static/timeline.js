@@ -3,6 +3,91 @@ import { formatTimelineEvent } from "./event_format.js";
 import { els, state } from "./state.js";
 import { extractApprovalActions } from "./timeline_helpers.js";
 
+const PHASE_KEYS = ["task", "plan", "patch", "tests", "diff", "approval"];
+const PHASE_EVENT_MAP = {
+  plan: ["plan"],
+  patch: ["diff", "approval_required", "approval_applied"],
+  tests: ["test"],
+  diff: ["diff"],
+};
+
+function setPhaseBadge(el, status) {
+  if (!el) return;
+  const safe = ["pending", "running", "done", "failed", "skipped"].includes(status) ? status : "pending";
+  el.textContent = safe;
+  el.className = `phase-badge ${safe}`;
+}
+
+function deriveWorkflowStatus(detail) {
+  const status = {
+    task: "pending",
+    plan: "pending",
+    patch: "pending",
+    tests: "pending",
+    diff: "pending",
+    approval: "pending",
+  };
+  const runStatus = detail && detail.status ? String(detail.status) : "idle";
+  const events = Array.isArray(detail && detail.events) ? detail.events : [];
+
+  if (detail && detail.run_id) status.task = "running";
+  if (events.length > 0) status.task = "done";
+
+  for (const event of events) {
+    const type = event && event.event_type ? event.event_type : "";
+    const data = event && event.data ? event.data : {};
+    if ((PHASE_EVENT_MAP.plan || []).includes(type)) status.plan = "done";
+    if ((PHASE_EVENT_MAP.patch || []).includes(type)) status.patch = "done";
+    if ((PHASE_EVENT_MAP.diff || []).includes(type)) status.diff = "done";
+
+    if (type === "test") {
+      const output = String(data && data.output ? data.output : "").toLowerCase();
+      if (typeof data.ok === "boolean") status.tests = data.ok ? "done" : "failed";
+      else if (output.includes("not permitted")) status.tests = "skipped";
+      else status.tests = "done";
+    }
+
+    if (type === "approval_required") status.approval = "running";
+    if (type === "approval_applied") status.approval = "done";
+  }
+
+  if (runStatus === "failed") {
+    for (const key of PHASE_KEYS) {
+      if (status[key] === "running") status[key] = "failed";
+    }
+    if (status.tests === "pending" && status.patch === "done") status.tests = "failed";
+  }
+
+  if (runStatus === "done") {
+    if (status.task === "running") status.task = "done";
+    if (status.approval === "pending") status.approval = "skipped";
+    if (status.tests === "pending") status.tests = "skipped";
+  }
+
+  if (runStatus === "running") {
+    if (status.plan === "pending") status.plan = "running";
+    else if (status.patch === "pending") status.patch = "running";
+    else if (status.tests === "pending") status.tests = "running";
+  }
+
+  return status;
+}
+
+function renderWorkflowCard(detail) {
+  const runLabel = detail && detail.run_id
+    ? `${detail.status || "running"} · ${detail.run_id.slice(0, 8)}`
+    : "Kein Run ausgewählt";
+  if (els.workflowRunStateEl) els.workflowRunStateEl.textContent = runLabel;
+
+  const wf = deriveWorkflowStatus(detail);
+  setPhaseBadge(els.wfTaskEl, wf.task);
+  setPhaseBadge(els.wfPlanEl, wf.plan);
+  setPhaseBadge(els.wfPatchEl, wf.patch);
+  setPhaseBadge(els.wfTestsEl, wf.tests);
+  setPhaseBadge(els.wfDiffEl, wf.diff);
+  setPhaseBadge(els.wfApprovalEl, wf.approval);
+}
+
 function setDecisionBadge(el, enabled) {
   if (!el) return;
   el.textContent = enabled ? "enabled" : "disabled";
@@ -40,6 +125,7 @@ async function applyApprovedPatch(eventId) {
   if (!state.selectedRunId) return;
   await apiPost(`/task/runs/${encodeURIComponent(state.selectedRunId)}/approve-patch/${encodeURIComponent(eventId)}`, {});
   const detail = await apiGet(`/task/runs/${encodeURIComponent(state.selectedRunId)}`);
+  renderWorkflowCard(detail);
   renderToolDecision(detail.events || []);
   renderApprovalActions(detail.events || []);
   renderReplay(detail);
@@ -79,14 +165,19 @@ function renderApprovalActions(events) {
 
 export function renderRuns(runs) {
   els.runsListEl.innerHTML = "";
+  const firstRun = Array.isArray(runs) && runs.length > 0 ? runs[0] : null;
+  renderWorkflowCard(firstRun ? { run_id: firstRun.run_id, status: firstRun.status, events: [] } : null);
+
   for (const run of runs.slice(0, 12)) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "run-item";
-    btn.textContent = `${run.status} • ${run.task.slice(0, 40)}`;
+    const task = String(run.task || "").trim();
+    btn.textContent = `${run.status} · ${(task || "Task").slice(0, 40)}`;
     btn.addEventListener("click", async () => {
       state.selectedRunId = run.run_id;
       const detail = await apiGet(`/task/runs/${encodeURIComponent(run.run_id)}`);
+      renderWorkflowCard(detail);
       renderToolDecision(detail.events || []);
       renderApprovalActions(detail.events || []);
       renderReplay(detail);

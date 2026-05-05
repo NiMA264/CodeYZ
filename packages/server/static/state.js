@@ -42,6 +42,13 @@ export const els = {
   rollbackListEl: document.getElementById("rollback-list"),
   rollbackDetailEl: document.getElementById("rollback-detail"),
   rollbackApplyBtn: document.getElementById("rollback-apply"),
+  workflowRunStateEl: document.getElementById("workflow-run-state"),
+  wfTaskEl: document.getElementById("wf-task"),
+  wfPlanEl: document.getElementById("wf-plan"),
+  wfPatchEl: document.getElementById("wf-patch"),
+  wfTestsEl: document.getElementById("wf-tests"),
+  wfDiffEl: document.getElementById("wf-diff"),
+  wfApprovalEl: document.getElementById("wf-approval"),
 
   modelSelect: document.getElementById("model-select"),
   modeSelect: document.getElementById("mode-select"),
