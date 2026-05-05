@@ -134,6 +134,13 @@ def _replace_in_lines(original: str, node: ast.AST, replacement: str) -> str:
     return "".join(new_lines)
 
 
+def _node_source(original: str, node: ast.AST) -> str:
+    lines = original.splitlines(keepends=True)
+    start = node.lineno - 1
+    end = node.end_lineno
+    return "".join(lines[start:end])
+
+
 def apply_ast_patch_text(old_content: str, operation: str, target: str, code: str) -> str:
     if operation not in {"replace_function", "add_function", "add_import", "add_from_import"}:
         raise ValueError("Unsupported ast_patch operation")
@@ -164,6 +171,10 @@ def apply_ast_patch_text(old_content: str, operation: str, target: str, code: st
                         names = [alias.name for alias in node.names]
                         if import_name in names:
                             return original
+                        node_text = _node_source(original, node)
+                        if "(" in node_text or "#" in node_text:
+                            insert_line = node.end_lineno
+                            return _insert_line(original, insert_line, f"from {module_name} import {import_name}\n")
                         merged = f"from {module_name} import {', '.join(names + [import_name])}\n"
                         return _replace_in_lines(original, node, merged)
 
