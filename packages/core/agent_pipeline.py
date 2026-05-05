@@ -4,7 +4,7 @@ from packages.core.agents import coder, fixer, planner, reviewer, tester
 from packages.core.costs import BudgetCheck
 from packages.core.executor import run_build, run_tests, summarize_errors
 from packages.core.indexer import search_files
-from packages.core.patcher import PatchApprovalRequired, apply_patch, apply_unified_diff
+from packages.core.patcher import PatchApprovalRequired, apply_ast_patch, apply_patch, apply_unified_diff
 from packages.core.plugins import call_plugin
 from packages.core.permissions import (
     assert_can_run_autonomous,
@@ -40,12 +40,21 @@ def _apply_patches(patches: list[dict], access_level: str | None, run_id: str | 
     out: list[dict] = []
     for patch in patches[:3]:
         file_path = str(patch.get("file_path", "")).strip()
+        ast_patch = patch.get("ast_patch")
         unified_diff = str(patch.get("unified_diff", "")).strip()
         new_content = str(patch.get("new_content", ""))
         if not file_path:
             continue
         try:
-            if unified_diff:
+            if isinstance(ast_patch, dict):
+                result = apply_ast_patch(
+                    file_path,
+                    operation=str(ast_patch.get("operation", "")),
+                    target=str(ast_patch.get("target", "")),
+                    code=str(ast_patch.get("code", "")),
+                    access_level=access_level,
+                )
+            elif unified_diff:
                 result = apply_unified_diff(file_path, unified_diff, access_level=access_level)
             else:
                 result = apply_patch(file_path, new_content, access_level=access_level)
@@ -54,6 +63,8 @@ def _apply_patches(patches: list[dict], access_level: str | None, run_id: str | 
             patch_payload = {"file_path": file_path}
             if unified_diff:
                 patch_payload["unified_diff"] = unified_diff
+            elif isinstance(ast_patch, dict):
+                patch_payload["ast_patch"] = ast_patch
             else:
                 patch_payload["new_content"] = new_content
             if run_id is not None:
@@ -66,7 +77,7 @@ def _apply_patches(patches: list[dict], access_level: str | None, run_id: str | 
                         "risk_level": exc.risk_level,
                         "reasons": exc.reasons,
                         "stats": exc.stats,
-                        "patch_preview": (exc.patch_text or unified_diff or new_content)[:1000],
+                        "patch_preview": (exc.patch_text or unified_diff or str(ast_patch) or new_content)[:1000],
                         "patch": patch_payload,
                         "iteration": iteration or 0,
                     },
@@ -229,3 +240,4 @@ def run_multi_agent_task(
     finish_run(run_id, "failed", "Max iterations reached")
     run = get_run(run_id)
     return {"ok": False, "run_id": run_id, "iterations": iterations, "events": run["events"] if run else [], "error": "Max iterations reached", "estimated_total_cost_usd": round(budget.current_cost_usd, 6)}
+

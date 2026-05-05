@@ -25,6 +25,7 @@ from packages.core.plugins import list_plugins, load_plugins, register_plugin
 from packages.core.project_paths import get_current_project
 from packages.core.sessions import add_message, create_session
 from packages.core.sessions import initialize_sessions_storage
+from packages.core.task_runs import initialize_task_runs_storage
 from packages.core.workspace_context import build_workspace_context
 from packages.server.auth import require_auth
 from packages.server.errors import error_payload, raise_api_error
@@ -39,6 +40,7 @@ from packages.tools.git import git_diff, git_status
 async def lifespan(_app: FastAPI):
     initialize_sessions_storage()
     initialize_automations_storage()
+    initialize_task_runs_storage()
     yield
 
 

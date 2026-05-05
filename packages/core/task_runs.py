@@ -3,9 +3,10 @@
 import json
 import re
 from datetime import datetime, timezone
-from threading import Lock
+from threading import RLock
 from uuid import uuid4
 
+from packages.core.persistence import atomic_write_text, file_lock
 from packages.core.runtime_paths import ensure_runtime_dirs
 
 RUNS_FILE = ensure_runtime_dirs()["runs"] / "runs.jsonl"
@@ -19,7 +20,7 @@ _SECRET_PATTERNS = [
 
 _RUNS: dict[str, dict] = {}
 _RUN_ORDER: list[str] = []
-_LOCK = Lock()
+_LOCK = RLock()
 
 
 def _now_iso() -> str:
@@ -47,9 +48,23 @@ def _sanitize(value):
 
 
 def _append_jsonl(record: dict) -> None:
-    RUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with RUNS_FILE.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    with _LOCK:
+        with file_lock(RUNS_FILE):
+            RUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with RUNS_FILE.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _save_approval_state(run_id: str, source_event_id: str, status: str) -> None:
+    _append_jsonl(
+        {
+            "kind": "approval_state",
+            "run_id": run_id,
+            "source_event_id": source_event_id,
+            "status": status,
+            "ts": _now_iso(),
+        }
+    )
 
 
 def create_run(task: str, model: str | None, access_level: str | None) -> str:
@@ -64,11 +79,26 @@ def create_run(task: str, model: str | None, access_level: str | None) -> str:
         "created_at": _now_iso(),
         "finished_at": None,
         "events": [],
+        "approval_states": {},
     }
     with _LOCK:
         _RUNS[run_id] = run
         _RUN_ORDER.append(run_id)
-    _append_jsonl({"kind": "run_created", "run_id": run_id, "task": run["task"], "ts": run["created_at"]})
+    _append_jsonl(
+        {
+            "kind": "run_created",
+            "run_id": run_id,
+            "task": run["task"],
+            "model": run["model"],
+            "access_level": run["access_level"],
+            "status": run["status"],
+            "summary": run["summary"],
+            "created_at": run["created_at"],
+            "finished_at": run["finished_at"],
+            "approval_states": run["approval_states"],
+            "ts": run["created_at"],
+        }
+    )
     return run_id
 
 
@@ -152,3 +182,212 @@ def get_event(run_id: str, event_id: str) -> dict | None:
         if str(event.get("event_id", "")) == event_id:
             return event
     return None
+
+
+def has_approval_applied(run_id: str, source_event_id: str) -> bool:
+    run = get_run(run_id)
+    if run is None:
+        return False
+    for event in run.get("events", []):
+        if event.get("event_type") != "approval_applied":
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        if str(data.get("source_event_id", "")) == source_event_id:
+            return True
+    return False
+
+
+def claim_approval_event(run_id: str, source_event_id: str) -> bool:
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            return False
+        states = run.setdefault("approval_states", {})
+        current = str(states.get(source_event_id, ""))
+        if current in {"claimed", "applied"}:
+            return False
+        for event in run.get("events", []):
+            if event.get("event_type") != "approval_applied":
+                continue
+            data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            if str(data.get("source_event_id", "")) == source_event_id:
+                states[source_event_id] = "applied"
+                _save_approval_state(run_id, source_event_id, "applied")
+                return False
+        states[source_event_id] = "claimed"
+        _save_approval_state(run_id, source_event_id, "claimed")
+        return True
+
+
+def mark_approval_event(run_id: str, source_event_id: str, status: str) -> None:
+    if status not in {"claimed", "applied", "failed"}:
+        raise ValueError("Invalid approval status")
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            return
+        states = run.setdefault("approval_states", {})
+        states[source_event_id] = status
+        _save_approval_state(run_id, source_event_id, status)
+
+
+def _load_runs_unlocked() -> None:
+    if not RUNS_FILE.exists():
+        _RUNS.clear()
+        _RUN_ORDER.clear()
+        return
+    runs: dict[str, dict] = {}
+    order: list[str] = []
+    try:
+        lines = RUNS_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        kind = str(record.get("kind", ""))
+        run_id = str(record.get("run_id", ""))
+        if not run_id:
+            continue
+
+        if kind == "run_created":
+            run = {
+                "run_id": run_id,
+                "task": _sanitize(str(record.get("task", ""))),
+                "model": str(record.get("model", "")),
+                "access_level": str(record.get("access_level", "")),
+                "status": _sanitize(str(record.get("status", "running"))),
+                "summary": _sanitize(str(record.get("summary", ""))),
+                "created_at": str(record.get("created_at", record.get("ts", _now_iso()))),
+                "finished_at": record.get("finished_at"),
+                "events": [],
+                "approval_states": {},
+            }
+            approval_states = record.get("approval_states", {})
+            if isinstance(approval_states, dict):
+                run["approval_states"] = {
+                    str(k): str(v)
+                    for k, v in approval_states.items()
+                    if str(v) in {"claimed", "applied", "failed"}
+                }
+            runs[run_id] = run
+            if run_id not in order:
+                order.append(run_id)
+            continue
+
+        run = runs.get(run_id)
+        if run is None:
+            continue
+
+        if kind == "event":
+            event = {
+                "event_id": str(record.get("event_id", uuid4().hex)),
+                "ts": str(record.get("ts", _now_iso())),
+                "event_type": str(record.get("event_type", "unknown")),
+                "agent_role": _sanitize(str(record.get("agent_role", ""))),
+                "title": _sanitize(str(record.get("title", ""))),
+                "data": _sanitize(record.get("data")),
+            }
+            run["events"].append(event)
+        elif kind == "run_finished":
+            run["status"] = _sanitize(str(record.get("status", run["status"])))
+            run["summary"] = _sanitize(str(record.get("summary", run["summary"])))
+            run["finished_at"] = str(record.get("ts", run["finished_at"] or _now_iso()))
+        elif kind == "approval_state":
+            source_event_id = str(record.get("source_event_id", ""))
+            status = str(record.get("status", ""))
+            if source_event_id and status in {"claimed", "applied", "failed"}:
+                run.setdefault("approval_states", {})[source_event_id] = status
+
+    _RUNS.clear()
+    _RUNS.update(runs)
+    _RUN_ORDER.clear()
+    _RUN_ORDER.extend(order)
+
+
+def load_runs() -> None:
+    with _LOCK:
+        _load_runs_unlocked()
+
+
+def initialize_task_runs_storage() -> None:
+    load_runs()
+
+
+def compact_runs_storage() -> None:
+    with _LOCK:
+        with file_lock(RUNS_FILE):
+            _load_runs_unlocked()
+            run_ids = list(_RUN_ORDER)
+            runs = [dict(_RUNS[rid]) for rid in run_ids if rid in _RUNS]
+            records: list[dict] = []
+            for run in runs:
+                run_id = str(run.get("run_id", ""))
+                if not run_id:
+                    continue
+                approval_states = run.get("approval_states", {})
+                if not isinstance(approval_states, dict):
+                    approval_states = {}
+                cleaned_states = {
+                    str(k): str(v)
+                    for k, v in approval_states.items()
+                    if str(v) in {"claimed", "applied", "failed"}
+                }
+
+                records.append(
+                    {
+                        "kind": "run_created",
+                        "run_id": run_id,
+                        "task": run.get("task", ""),
+                        "model": run.get("model", ""),
+                        "access_level": run.get("access_level", ""),
+                        "status": run.get("status", "running"),
+                        "summary": run.get("summary", ""),
+                        "created_at": run.get("created_at", _now_iso()),
+                        "finished_at": run.get("finished_at"),
+                        "approval_states": cleaned_states,
+                        "ts": run.get("created_at", _now_iso()),
+                    }
+                )
+
+                for event in run.get("events", []):
+                    if not isinstance(event, dict):
+                        continue
+                    records.append(
+                        {
+                            "kind": "event",
+                            "run_id": run_id,
+                            "event_id": str(event.get("event_id", uuid4().hex)),
+                            "event_type": str(event.get("event_type", "unknown")),
+                            "agent_role": str(event.get("agent_role", "")),
+                            "title": str(event.get("title", "")),
+                            "data": event.get("data"),
+                            "ts": str(event.get("ts", _now_iso())),
+                        }
+                    )
+
+                finished_at = run.get("finished_at")
+                status = str(run.get("status", "running"))
+                summary = str(run.get("summary", ""))
+                if finished_at or status != "running" or summary:
+                    records.append(
+                        {
+                            "kind": "run_finished",
+                            "run_id": run_id,
+                            "status": status,
+                            "summary": summary,
+                            "ts": str(finished_at or _now_iso()),
+                        }
+                    )
+
+            content = "\n".join(json.dumps(r, ensure_ascii=False) for r in records)
+            if content:
+                content += "\n"
+            atomic_write_text(RUNS_FILE, content)

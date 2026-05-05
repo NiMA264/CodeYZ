@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from packages.core.patcher import PatchApprovalRequired, apply_unified_diff, assess_patch_risk
+from packages.core.patcher import PatchApprovalRequired, apply_ast_patch, apply_unified_diff, assess_patch_risk
 from packages.core.permissions import FILES
 from packages.core.project_paths import add_project_path, set_current_project
 
@@ -106,3 +106,188 @@ def test_high_risk_allowed_with_approval(tmp_path: Path) -> None:
     out = apply_unified_diff("e.txt", diff_text, access_level=FILES, approved=True)
     assert out["risk_level"] == "high"
     assert target.read_text(encoding="utf-8").strip() == ""
+
+
+def test_apply_ast_patch_replace_function(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "mod.py"
+    target.write_text("def a():\n    return 1\n\n\ndef b():\n    return 2\n", encoding="utf-8")
+    out = apply_ast_patch(
+        "mod.py",
+        operation="replace_function",
+        target="a",
+        code="def a():\n    return 99\n",
+        access_level=FILES,
+    )
+    assert out["file"] == "mod.py"
+    text = target.read_text(encoding="utf-8")
+    assert "return 99" in text
+    assert "def b():" in text
+
+
+def test_apply_ast_patch_add_function(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "add.py"
+    target.write_text("def x():\n    return 1\n", encoding="utf-8")
+    apply_ast_patch(
+        "add.py",
+        operation="add_function",
+        target="y",
+        code="def y():\n    return 2\n",
+        access_level=FILES,
+    )
+    text = target.read_text(encoding="utf-8")
+    assert "def y():" in text
+
+
+def test_apply_ast_patch_invalid_syntax_no_write(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "bad.py"
+    original = "def a():\n    return 1\n"
+    target.write_text(original, encoding="utf-8")
+    with pytest.raises(ValueError):
+        apply_ast_patch(
+            "bad.py",
+            operation="replace_function",
+            target="a",
+            code="def a(:\n    return 2\n",
+            access_level=FILES,
+        )
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_apply_ast_patch_function_not_found(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "miss.py"
+    target.write_text("def a():\n    return 1\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        apply_ast_patch(
+            "miss.py",
+            operation="replace_function",
+            target="missing",
+            code="def missing():\n    return 2\n",
+            access_level=FILES,
+        )
+
+
+def test_apply_ast_patch_replace_async_function(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "async_mod.py"
+    target.write_text("async def fetch():\n    return 1\n", encoding="utf-8")
+    apply_ast_patch(
+        "async_mod.py",
+        operation="replace_function",
+        target="fetch",
+        code="async def fetch():\n    return 2\n",
+        access_level=FILES,
+    )
+    text = target.read_text(encoding="utf-8")
+    assert "async def fetch" in text
+    assert "return 2" in text
+
+
+def test_apply_ast_patch_replace_class_method(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "class_mod.py"
+    target.write_text("class Service:\n    def run(self):\n        return 1\n", encoding="utf-8")
+    apply_ast_patch(
+        "class_mod.py",
+        operation="replace_function",
+        target="Service.run",
+        code="def run(self):\n    return 42\n",
+        access_level=FILES,
+    )
+    text = target.read_text(encoding="utf-8")
+    assert "def run(self)" in text
+    assert "return 42" in text
+
+
+def test_apply_ast_patch_replace_async_class_method(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "class_async.py"
+    target.write_text("class Service:\n    async def run(self):\n        return 1\n", encoding="utf-8")
+    apply_ast_patch(
+        "class_async.py",
+        operation="replace_function",
+        target="Service.run",
+        code="async def run(self):\n    return 42\n",
+        access_level=FILES,
+    )
+    text = target.read_text(encoding="utf-8")
+    assert "async def run(self)" in text
+    assert "return 42" in text
+
+
+def test_apply_ast_patch_unknown_class_or_method_no_write(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "unknown.py"
+    original = "class Service:\n    def run(self):\n        return 1\n"
+    target.write_text(original, encoding="utf-8")
+    with pytest.raises(ValueError):
+        apply_ast_patch(
+            "unknown.py",
+            operation="replace_function",
+            target="Missing.run",
+            code="def run(self):\n    return 2\n",
+            access_level=FILES,
+        )
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_apply_ast_patch_ambiguous_method_requires_class_target(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "ambiguous.py"
+    original = (
+        "class A:\n"
+        "    def run(self):\n"
+        "        return 'a'\n\n"
+        "class B:\n"
+        "    def run(self):\n"
+        "        return 'b'\n"
+    )
+    target.write_text(original, encoding="utf-8")
+    with pytest.raises(ValueError):
+        apply_ast_patch(
+            "ambiguous.py",
+            operation="replace_function",
+            target="run",
+            code="def run(self):\n    return 'x'\n",
+            access_level=FILES,
+        )
+    assert target.read_text(encoding="utf-8") == original

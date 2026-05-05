@@ -1,6 +1,6 @@
 ﻿from fastapi.testclient import TestClient
 
-from packages.core.task_runs import add_event, create_run
+from packages.core.task_runs import add_event, claim_approval_event, create_run, mark_approval_event
 from packages.server.app import app
 
 
@@ -89,6 +89,7 @@ def test_approve_patch_applies_exact_stored_patch_and_emits_event(monkeypatch, t
         payload = res.json()
         assert payload["ok"] is True
         assert payload["event"]["event_type"] == "approval_applied"
+        assert payload["event"]["data"]["source_event_id"] == event["event_id"]
         assert payload["result"]["rollback_id"]
         assert "line2-approved" in target.read_text(encoding="utf-8")
     finally:
@@ -138,3 +139,57 @@ def test_approve_patch_failure_emits_error_and_keeps_file(monkeypatch, tmp_path)
         assert any(e["event_type"] == "error" and e["title"] == "Approval apply failed" for e in events)
     finally:
         set_current_project(old_project)
+
+
+def test_approve_patch_second_call_conflict_and_no_double_apply(monkeypatch, tmp_path) -> None:
+    from packages.core.project_paths import add_project_path, get_current_project, set_current_project
+
+    monkeypatch.setenv("CODEYZ_LOCAL_TOKEN", "token123")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    old_project = get_current_project()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+    try:
+        target = ws / "c.txt"
+        target.write_text("a\nb\n", encoding="utf-8")
+        diff_text = "@@ -1,2 +1,2 @@\n a\n-b\n+b2"
+        run_id = create_run("Task approval twice", "gpt-5.4-mini", "Autonom")
+        event = add_event(
+            run_id,
+            "approval_required",
+            "High-risk patch requires approval",
+            {
+                "file": "c.txt",
+                "risk_level": "high",
+                "reasons": ["high_deletion_ratio"],
+                "stats": {"changed_lines": 40},
+                "patch_preview": diff_text[:120],
+                "patch": {"file_path": "c.txt", "unified_diff": diff_text},
+            },
+        )
+        client = TestClient(app)
+        first = client.post(
+            f"/task/runs/{run_id}/approve-patch/{event['event_id']}",
+            headers={"x-api-key": "token123"},
+        )
+        assert first.status_code == 200
+        after_first = target.read_text(encoding="utf-8")
+        second = client.post(
+            f"/task/runs/{run_id}/approve-patch/{event['event_id']}",
+            headers={"x-api-key": "token123"},
+        )
+        assert second.status_code == 409
+        assert second.json()["code"] in {"approval_already_applied", "approval_already_claimed"}
+        assert target.read_text(encoding="utf-8") == after_first
+    finally:
+        set_current_project(old_project)
+
+
+def test_claim_approval_event_atomic_states() -> None:
+    run_id = create_run("claim", "gpt-5.4-mini", "Autonom")
+    source = "evt-1"
+    assert claim_approval_event(run_id, source) is True
+    assert claim_approval_event(run_id, source) is False
+    mark_approval_event(run_id, source, "failed")
+    assert claim_approval_event(run_id, source) is True

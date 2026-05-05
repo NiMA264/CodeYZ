@@ -6,7 +6,7 @@ from openai import OpenAI
 
 from packages.core.agent_pipeline import run_multi_agent_task
 from packages.core.executor import run_build, run_tests, summarize_errors
-from packages.core.patcher import PatchApprovalRequired, apply_patch, apply_unified_diff
+from packages.core.patcher import PatchApprovalRequired, apply_ast_patch, apply_patch, apply_unified_diff
 from packages.core.permissions import assert_can_run_autonomous
 from packages.core.task_runs import add_event, create_run, finish_run, get_run
 from packages.tools.files import list_files, read_file
@@ -64,9 +64,12 @@ Project snapshot:
 
 Return JSON with keys:
 - plan: short string
-- patches: array of objects {{"file_path": "...", "unified_diff": "..."}}
-  - prefer unified_diff for small hunks
-  - fallback new_content is allowed only if diff is not possible
+- patches: array of objects with one of:
+  - {"file_path": "...", "ast_patch": {"operation": "replace_function|add_function", "target": "function_name", "code": "def ..."}}
+  - {"file_path": "...", "unified_diff": "..."}
+  - {"file_path": "...", "new_content": "..."}
+  - prefer ast_patch for simple Python function edits
+  - fallback to unified_diff or new_content only if needed
 Limit patches to at most 3 files.
 """
     selected_model = model if model in ALLOWED_MODELS else MODEL
@@ -116,12 +119,21 @@ def run_autonomous_task(
         patch_results: list[dict[str, str]] = []
         for patch in plan_payload.get("patches", [])[:3]:
             file_path = str(patch.get("file_path", "")).strip()
+            ast_patch = patch.get("ast_patch")
             unified_diff = str(patch.get("unified_diff", "")).strip()
             new_content = str(patch.get("new_content", ""))
             if not file_path:
                 continue
             try:
-                if unified_diff:
+                if isinstance(ast_patch, dict):
+                    patch_result = apply_ast_patch(
+                        file_path,
+                        operation=str(ast_patch.get("operation", "")),
+                        target=str(ast_patch.get("target", "")),
+                        code=str(ast_patch.get("code", "")),
+                        access_level=access_level,
+                    )
+                elif unified_diff:
                     patch_result = apply_unified_diff(file_path, unified_diff, access_level=access_level)
                 else:
                     patch_result = apply_patch(file_path, new_content, access_level=access_level)
@@ -132,6 +144,8 @@ def run_autonomous_task(
                 patch_payload = {"file_path": file_path}
                 if unified_diff:
                     patch_payload["unified_diff"] = unified_diff
+                elif isinstance(ast_patch, dict):
+                    patch_payload["ast_patch"] = ast_patch
                 else:
                     patch_payload["new_content"] = new_content
                 approval_payload = {
@@ -139,7 +153,7 @@ def run_autonomous_task(
                     "risk_level": exc.risk_level,
                     "reasons": exc.reasons,
                     "stats": exc.stats,
-                    "patch_preview": (exc.patch_text or unified_diff or new_content)[:1000],
+                    "patch_preview": (exc.patch_text or unified_diff or str(ast_patch) or new_content)[:1000],
                     "patch": patch_payload,
                 }
                 patch_results.append({"file": file_path, "diff": "", "archive": "", "error": str(exc)})
@@ -182,3 +196,4 @@ def run_autonomous_task(
         "events": run["events"] if run else [],
         "error": "Max iterations reached",
     }
+

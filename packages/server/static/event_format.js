@@ -19,6 +19,16 @@ export function formatTimelineEvent(event) {
     ];
   }
 
+  if (eventType === "approval_applied") {
+    const file = data && data.file ? data.file : "-";
+    const source = data && data.source_event_id ? data.source_event_id : "-";
+    const rollbackId = data && data.rollback_id ? data.rollback_id : "-";
+    return [
+      `- [approval_applied] (${role}) ${title || "Approved patch applied"}`,
+      `  file=${file} source_event_id=${source} rollback_id=${rollbackId}`,
+    ];
+  }
+
   const lines = [`- [${eventType}] (${role}) ${title}`];
   if (data) lines.push(`  ${JSON.stringify(data, null, 2)}`);
   return lines;

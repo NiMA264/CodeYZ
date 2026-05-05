@@ -56,3 +56,22 @@ console.log(JSON.stringify(lines));
     out = _run_node(script, repo)
     lines = json.loads(out)
     assert lines[0].startswith("- [error]")
+
+
+def test_event_formatter_handles_approval_applied() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    script = """
+import { formatTimelineEvent } from './packages/server/static/event_format.js';
+const lines = formatTimelineEvent({
+  event_type: 'approval_applied',
+  agent_role: 'reviewer',
+  title: 'Approved patch applied',
+  data: { file: 'a.py', source_event_id: 'evt-1', rollback_id: 'rb-1' }
+});
+console.log(JSON.stringify(lines));
+"""
+    out = _run_node(script, repo)
+    lines = json.loads(out)
+    joined = "\\n".join(lines)
+    assert "approval_applied" in joined
+    assert "source_event_id=evt-1" in joined

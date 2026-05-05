@@ -54,13 +54,20 @@ function renderApprovalActions(events) {
     row.className = "approval-row";
 
     const label = document.createElement("span");
-    label.textContent = `${action.file} (${action.riskLevel})`;
+    label.textContent = action.alreadyApplied
+      ? `${action.file} (${action.riskLevel}) - applied`
+      : `${action.file} (${action.riskLevel})`;
 
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "run-item";
     btn.textContent = "Apply approved patch";
+    if (action.alreadyApplied) {
+      btn.disabled = true;
+      btn.textContent = "Already applied";
+    }
     btn.addEventListener("click", async () => {
+      if (action.alreadyApplied) return;
       await applyApprovedPatch(action.eventId);
     });
 

@@ -6,7 +6,15 @@ from packages.core.loop import run_task
 from packages.core.model_router import set_role_models
 from packages.core.patcher import apply_patch, apply_unified_diff
 from packages.core.permissions import can_run_autonomous
-from packages.core.task_runs import add_event, get_event, get_run, list_runs
+from packages.core.task_runs import (
+    add_event,
+    claim_approval_event,
+    get_event,
+    get_run,
+    has_approval_applied,
+    list_runs,
+    mark_approval_event,
+)
 from packages.server.errors import raise_api_error
 
 router = APIRouter(prefix="/task", tags=["task"])
@@ -79,6 +87,20 @@ def approve_patch(run_id: str, event_id: str) -> dict:
             "Only approval_required events can be approved.",
             "Select an approval_required event from the timeline.",
         )
+    if has_approval_applied(run_id, event_id):
+        raise_api_error(
+            409,
+            "approval_already_applied",
+            "This approval-required patch was already applied.",
+            "Reload timeline and use the latest run state.",
+        )
+    if not claim_approval_event(run_id, event_id):
+        raise_api_error(
+            409,
+            "approval_already_claimed",
+            "This approval-required patch is already being processed or was already applied.",
+            "Reload timeline and wait for the current approval result.",
+        )
 
     data = event.get("data") or {}
     patch = data.get("patch") if isinstance(data, dict) else None
@@ -97,6 +119,7 @@ def approve_patch(run_id: str, event_id: str) -> dict:
         else:
             out = apply_patch(file_path, str(new_content), access_level="Autonom", approved=True)
     except Exception as exc:
+        mark_approval_event(run_id, event_id, "failed")
         add_event(
             run_id,
             "error",
@@ -116,4 +139,5 @@ def approve_patch(run_id: str, event_id: str) -> dict:
         "rollback_id": out.get("rollback_id", ""),
     }
     applied_event = add_event(run_id, "approval_applied", "Approved patch applied", payload, agent_role="reviewer")
+    mark_approval_event(run_id, event_id, "applied")
     return {"ok": True, "run_id": run_id, "event": applied_event, "result": out}

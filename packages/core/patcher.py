@@ -2,6 +2,7 @@
 from difflib import unified_diff
 from pathlib import Path
 
+from packages.core.ast_patcher import apply_ast_patch_text
 from packages.core.permissions import assert_can_write_files
 from packages.core.rollback import create_rollback_record
 from packages.core.runtime_paths import ensure_runtime_dirs
@@ -269,5 +270,38 @@ def apply_unified_diff(
 
     new_content = _apply_unified_diff_text(old_content, unified_diff)
     out = _archive_and_write(file_path, target, old_content, new_content)
+    out["risk_level"] = str(risk["level"])
+    return out
+
+
+def apply_ast_patch(
+    file_path: str,
+    operation: str,
+    target: str,
+    code: str,
+    access_level: str | None = None,
+    approved: bool = False,
+) -> dict[str, str]:
+    assert_can_write_files(access_level)
+    if not file_path.endswith(".py"):
+        raise ValueError("ast_patch currently supports Python files only")
+
+    target_path = safe_path(file_path)
+    old_content = ""
+    exists_before = target_path.exists()
+    if exists_before:
+        old_content = target_path.read_text(encoding="utf-8")
+
+    new_content = apply_ast_patch_text(old_content, operation=operation, target=target, code=code)
+    diff_text = _build_diff(file_path, old_content, new_content)
+    risk = assess_patch_risk(file_path, diff_text, is_new_file=not exists_before)
+    try:
+        _enforce_risk_policy(risk, approved=approved)
+    except PatchApprovalRequired as exc:
+        exc.file_path = file_path
+        exc.patch_text = diff_text
+        raise
+
+    out = _archive_and_write(file_path, target_path, old_content, new_content)
     out["risk_level"] = str(risk["level"])
     return out

@@ -28,6 +28,7 @@ import { extractApprovalActions } from './packages/server/static/timeline_helper
 const actions = extractApprovalActions([
   { event_id: '1', event_type: 'error', data: { file: 'a.py', patch: { file_path: 'a.py', unified_diff: '@@' } } },
   { event_id: '2', event_type: 'approval_required', data: { file: 'b.py', risk_level: 'high', patch_preview: '@@', patch: { file_path: 'b.py', unified_diff: '@@' } } },
+  { event_id: '4', event_type: 'approval_applied', data: { source_event_id: '2' } },
   { event_id: '3', event_type: 'approval_required', data: { file: 'c.py' } }
 ]);
 console.log(JSON.stringify(actions));
@@ -37,3 +38,4 @@ console.log(JSON.stringify(actions));
     assert len(data) == 1
     assert data[0]["eventId"] == "2"
     assert data[0]["file"] == "b.py"
+    assert data[0]["alreadyApplied"] is True
