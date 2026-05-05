@@ -16,6 +16,28 @@ codeyz server
 
 Open: `http://127.0.0.1:8765/ui/`
 
+## Developer Setup
+
+```bash
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -e .[dev]
+```
+
+Quality and tests:
+
+```bash
+ruff check .
+pytest -q
+```
+
+Optional Playwright browser install for full UI smoke coverage:
+
+```bash
+python -m playwright install chromium
+pytest -q tests/test_ui_smoke.py
+```
+
 ## Download & Install (Windows)
 
 ### EXE build locally
@@ -99,6 +121,7 @@ User config and runtime files are stored in:
   - `/ui/` erreichbar und HTML-Module-Wiring korrekt
   - zentrale UI-Elemente vorhanden (`chat-form`, `messages`, `explorer`, `runs-list`, `plugins-list`)
   - optionaler echter Browser-Init-Check mit Playwright (wird automatisch übersprungen, wenn Playwright nicht installiert ist)
+- CI läuft standardmäßig ohne Browser-Binaries; ein separater optionaler Browser-Job kann manuell per `workflow_dispatch` gestartet werden.
 
 ## Version
 
