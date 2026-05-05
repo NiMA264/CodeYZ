@@ -73,6 +73,71 @@ function deriveWorkflowStatus(detail) {
   return status;
 }
 
+function deriveRunSummary(detail) {
+  const events = Array.isArray(detail && detail.events) ? detail.events : [];
+  const runStatus = detail && detail.status ? String(detail.status) : "unknown";
+  const taskRaw = detail && detail.task ? String(detail.task).trim() : "";
+  const task = taskRaw ? taskRaw.slice(0, 72) : "No task";
+
+  const diffEvents = events.filter((e) => e && e.event_type === "diff");
+  const patchFiles = new Set();
+  for (const ev of diffEvents) {
+    const data = ev && ev.data ? ev.data : {};
+    if (data && data.file) patchFiles.add(String(data.file));
+    const title = ev && ev.title ? String(ev.title) : "";
+    const marker = "diff ";
+    const idx = title.lastIndexOf(marker);
+    if (idx >= 0) {
+      const candidate = title.slice(idx + marker.length).trim();
+      if (candidate) patchFiles.add(candidate);
+    }
+  }
+  const patch = patchFiles.size > 0 ? `${patchFiles.size} file${patchFiles.size === 1 ? "" : "s"} changed` : "unknown";
+
+  const testEvents = events.filter((e) => e && e.event_type === "test");
+  let tests = "unknown";
+  for (let i = testEvents.length - 1; i >= 0; i -= 1) {
+    const data = testEvents[i] && testEvents[i].data ? testEvents[i].data : {};
+    const output = String(data && data.output ? data.output : "");
+    if (typeof data.ok === "boolean") {
+      tests = data.ok ? "passed" : "failed";
+      break;
+    }
+    if (output.toLowerCase().includes("not permitted")) {
+      tests = "skipped";
+      break;
+    }
+  }
+
+  const riskEvents = events.filter((e) => e && e.event_type === "approval_required");
+  let risk = "unknown";
+  if (riskEvents.length > 0) {
+    const levels = riskEvents.map((e) => String(e?.data?.risk_level || "unknown"));
+    if (levels.includes("high")) risk = "high";
+    else if (levels.includes("medium")) risk = "medium";
+    else if (levels.includes("low")) risk = "low";
+  }
+
+  const approvalRequired = riskEvents.length > 0;
+  const approvalApplied = events.some((e) => e && e.event_type === "approval_applied");
+  let decision = "unknown";
+  if (runStatus === "running") decision = "running";
+  else if (runStatus === "failed") decision = "failed";
+  else if (approvalRequired && !approvalApplied) decision = "ready for approval";
+  else if (tests === "failed") decision = "needs revision";
+
+  return { task, patch, tests, risk, decision };
+}
+
+function renderRunSummary(detail) {
+  const summary = deriveRunSummary(detail);
+  if (els.wfSummaryTaskEl) els.wfSummaryTaskEl.textContent = summary.task;
+  if (els.wfSummaryPatchEl) els.wfSummaryPatchEl.textContent = summary.patch;
+  if (els.wfSummaryTestsEl) els.wfSummaryTestsEl.textContent = summary.tests;
+  if (els.wfSummaryRiskEl) els.wfSummaryRiskEl.textContent = summary.risk;
+  if (els.wfSummaryDecisionEl) els.wfSummaryDecisionEl.textContent = summary.decision;
+}
+
 function renderWorkflowCard(detail) {
   const runLabel = detail && detail.run_id
     ? `${detail.status || "running"} · ${detail.run_id.slice(0, 8)}`
@@ -86,6 +151,7 @@ function renderWorkflowCard(detail) {
   setPhaseBadge(els.wfTestsEl, wf.tests);
   setPhaseBadge(els.wfDiffEl, wf.diff);
   setPhaseBadge(els.wfApprovalEl, wf.approval);
+  renderRunSummary(detail);
 }
 
 function setDecisionBadge(el, enabled) {
@@ -166,7 +232,7 @@ function renderApprovalActions(events) {
 export function renderRuns(runs) {
   els.runsListEl.innerHTML = "";
   const firstRun = Array.isArray(runs) && runs.length > 0 ? runs[0] : null;
-  renderWorkflowCard(firstRun ? { run_id: firstRun.run_id, status: firstRun.status, events: [] } : null);
+  renderWorkflowCard(firstRun ? { run_id: firstRun.run_id, status: firstRun.status, task: firstRun.task, events: [] } : null);
 
   for (const run of runs.slice(0, 12)) {
     const btn = document.createElement("button");

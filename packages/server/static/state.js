@@ -49,6 +49,11 @@ export const els = {
   wfTestsEl: document.getElementById("wf-tests"),
   wfDiffEl: document.getElementById("wf-diff"),
   wfApprovalEl: document.getElementById("wf-approval"),
+  wfSummaryTaskEl: document.getElementById("wf-summary-task"),
+  wfSummaryPatchEl: document.getElementById("wf-summary-patch"),
+  wfSummaryTestsEl: document.getElementById("wf-summary-tests"),
+  wfSummaryRiskEl: document.getElementById("wf-summary-risk"),
+  wfSummaryDecisionEl: document.getElementById("wf-summary-decision"),
 
   modelSelect: document.getElementById("model-select"),
   modeSelect: document.getElementById("mode-select"),
