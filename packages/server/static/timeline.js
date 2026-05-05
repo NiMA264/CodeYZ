@@ -277,6 +277,11 @@ export function renderRollbacks(items) {
 export async function refreshRuns() {
   const data = await apiGet("/task/runs");
   renderRuns(data.runs || []);
+  const desired = readPrefs().session?.lastRunId || "";
+  if (desired && !state.selectedRunId && (data.runs || []).some((r) => r.run_id === desired)) {
+    await openRun(desired);
+  }
+  return data.runs || [];
 }
 
 export async function refreshRollbacks() {

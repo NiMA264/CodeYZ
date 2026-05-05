@@ -110,11 +110,25 @@
           <button id="clear-token" type="button">Löschen</button>
         </div>
       </section>
+      </div>
     </aside>
 
-    <div id="left-resize-handle" class="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize left sidebar"></div>
+    <div id="left-resize-handle" class="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize left sidebar" tabindex="0"></div>
 
     <section class="chat-area">
+      <section class="focus-mode-bar">
+        <span class="focus-mode-label">Focus</span>
+        <div class="focus-mode-buttons" role="group" aria-label="Workspace focus mode">
+          <button id="focus-workflow" type="button" class="focus-btn">Workflow</button>
+          <button id="focus-code" type="button" class="focus-btn">Code</button>
+          <button id="focus-chat" type="button" class="focus-btn">Chat</button>
+        </div>
+        <div class="focus-mode-buttons" role="group" aria-label="Layout actions">
+          <button id="export-layout" type="button" class="focus-btn">Export Layout</button>
+          <button id="import-layout" type="button" class="focus-btn">Import Layout</button>
+        </div>
+      </section>
+
       <section id="workflow-card" class="workflow-card collapsible" data-collapsible data-panel-id="workflow" aria-live="polite">
         <div class="workflow-head">
           <button type="button" class="collapse-toggle workflow-toggle" data-collapse-toggle aria-expanded="true">

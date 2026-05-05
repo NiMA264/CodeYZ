@@ -94,6 +94,17 @@ export const els = {
   uiVersionEl: document.getElementById("ui-version"),
   leftResizeHandleEl: document.getElementById("left-resize-handle"),
   rightResizeHandleEl: document.getElementById("right-resize-handle"),
+  focusWorkflowBtn: document.getElementById("focus-workflow"),
+  focusCodeBtn: document.getElementById("focus-code"),
+  focusChatBtn: document.getElementById("focus-chat"),
+  exportLayoutBtn: document.getElementById("export-layout"),
+  importLayoutBtn: document.getElementById("import-layout"),
+  commandPaletteEl: document.getElementById("command-palette"),
+  commandBackdropEl: document.getElementById("command-backdrop"),
+  commandPanelEl: document.getElementById("command-panel"),
+  commandInputEl: document.getElementById("command-input"),
+  commandListEl: document.getElementById("command-list"),
+  uiToastEl: document.getElementById("ui-toast"),
 };
 
 export function scrollChatToBottom() {

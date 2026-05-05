@@ -352,9 +352,40 @@ function bindEvents() {
     pane.classList.toggle("hidden");
     els.toggleExplorerBtn.textContent = pane.classList.contains("hidden") ? "Einblenden" : "Ausblenden";
   });
+
+  if (els.focusWorkflowBtn) {
+    els.focusWorkflowBtn.addEventListener("click", () => applyFocusMode("workflow"));
+  }
+  if (els.focusCodeBtn) {
+    els.focusCodeBtn.addEventListener("click", () => applyFocusMode("code"));
+  }
+  if (els.focusChatBtn) {
+    els.focusChatBtn.addEventListener("click", () => applyFocusMode("chat"));
+  }
+  if (els.commandBackdropEl) {
+    els.commandBackdropEl.addEventListener("click", closeCommandPalette);
+  }
+  if (els.commandInputEl) {
+    els.commandInputEl.addEventListener("input", () => {
+      if (commandInputDebounce) clearTimeout(commandInputDebounce);
+      commandInputDebounce = setTimeout(() => {
+        paletteSelectedIndex = 0;
+        renderCommandPalette();
+      }, 60);
+    });
+  }
+  if (els.exportLayoutBtn) els.exportLayoutBtn.addEventListener("click", exportLayoutPreferences);
+  if (els.importLayoutBtn) els.importLayoutBtn.addEventListener("click", importLayoutPreferences);
+  if (els.messagesEl) {
+    els.messagesEl.addEventListener("scroll", () => {
+      patchPreferences({ session: { scrollTop: els.messagesEl.scrollTop } });
+    });
+  }
+  bindSummaryDetails();
 }
 
 export function initUi() {
+  migrateLegacyPreferencesIfNeeded();
   els.tokenInput.value = getToken();
   els.modelSelect.value = getStored(MODEL_KEY, "gpt-5.4-mini");
   els.modeSelect.value = getStored(MODE_KEY, "Chat");
@@ -367,7 +398,16 @@ export function initUi() {
   initCollapsibles();
   initResizablePanels();
   bindEvents();
+  bindKeyboardShortcuts();
+  applyFocusMode(readPreferences().mode || "workflow", false);
+  applySummaryDetailExpansion();
+  const prefs = readPreferences();
+  if (els.messagesEl && prefs.session?.scrollTop) {
+    els.messagesEl.scrollTop = Number(prefs.session.scrollTop) || 0;
+  }
+  if (prefs.session?.lastRunId) patchPreferences({ session: { lastRunId: prefs.session.lastRunId } });
   addMessage("assistant", "CodeYZ UI bereit.");
-  scrollChatToBottom();
+  if (prefs.session?.lastRunId) showToast("Session restored");
+  if (!prefs.session?.lastRunId) scrollChatToBottom();
   void refreshPanels();
 }
