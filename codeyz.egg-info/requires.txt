@@ -4,6 +4,9 @@ typer
 rich
 fastapi
 uvicorn
+
+[dev]
 pytest
 httpx
 ruff
+playwright

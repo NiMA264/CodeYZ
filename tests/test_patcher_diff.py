@@ -291,3 +291,133 @@ def test_apply_ast_patch_ambiguous_method_requires_class_target(tmp_path: Path) 
             access_level=FILES,
         )
     assert target.read_text(encoding="utf-8") == original
+
+
+def test_apply_ast_patch_add_import_adds_missing(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "imports.py"
+    target.write_text("def run():\n    return json.dumps({})\n", encoding="utf-8")
+    apply_ast_patch(
+        "imports.py",
+        operation="add_import",
+        target="json",
+        code="import json\n",
+        access_level=FILES,
+    )
+    assert target.read_text(encoding="utf-8").startswith("import json\n")
+
+
+def test_apply_ast_patch_add_import_idempotent(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "imports_idempotent.py"
+    original = "import json\n\ndef run():\n    return 1\n"
+    target.write_text(original, encoding="utf-8")
+    apply_ast_patch(
+        "imports_idempotent.py",
+        operation="add_import",
+        target="json",
+        code="import json\n",
+        access_level=FILES,
+    )
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_apply_ast_patch_add_from_import_adds_missing_name(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "from_import.py"
+    target.write_text("from os import path\n\ndef run():\n    return path.join('a', 'b')\n", encoding="utf-8")
+    apply_ast_patch(
+        "from_import.py",
+        operation="add_from_import",
+        target="os.getenv",
+        code="from os import getenv\n",
+        access_level=FILES,
+    )
+    text = target.read_text(encoding="utf-8")
+    assert "from os import path, getenv\n" in text
+
+
+def test_apply_ast_patch_block_wildcard_and_relative_imports(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "blocked_imports.py"
+    original = "def run():\n    return 1\n"
+    target.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        apply_ast_patch(
+            "blocked_imports.py",
+            operation="add_from_import",
+            target="os.path",
+            code="from os import *\n",
+            access_level=FILES,
+        )
+    assert target.read_text(encoding="utf-8") == original
+
+    with pytest.raises(ValueError):
+        apply_ast_patch(
+            "blocked_imports.py",
+            operation="add_from_import",
+            target="os.path",
+            code="from .os import path\n",
+            access_level=FILES,
+        )
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_apply_ast_patch_import_insert_after_docstring_before_functions(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "docstring_import.py"
+    target.write_text(
+        "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n\"\"\"module doc\"\"\"\n\ndef run():\n    return 1\n",
+        encoding="utf-8",
+    )
+    apply_ast_patch(
+        "docstring_import.py",
+        operation="add_import",
+        target="json",
+        code="import json\n",
+        access_level=FILES,
+    )
+    text = target.read_text(encoding="utf-8")
+    assert text.index("\"\"\"module doc\"\"\"") < text.index("import json\n")
+    assert text.index("import json\n") < text.index("def run():")
+
+
+def test_apply_ast_patch_import_invalid_syntax_no_write(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    add_project_path(str(ws))
+    set_current_project(str(ws))
+
+    target = ws / "invalid_import.py"
+    original = "def run():\n    return 1\n"
+    target.write_text(original, encoding="utf-8")
+    with pytest.raises(ValueError):
+        apply_ast_patch(
+            "invalid_import.py",
+            operation="add_import",
+            target="json",
+            code="import\n",
+            access_level=FILES,
+        )
+    assert target.read_text(encoding="utf-8") == original
