@@ -6,6 +6,13 @@ import { ACCESS_KEY, els, MODEL_KEY, MODE_KEY, PLAN_KEY, scrollChatToBottom, sta
 import { refreshRollbacks, refreshRuns } from "./timeline.js";
 
 const COLLAPSE_KEY_PREFIX = "codeyz_ui_collapsed_";
+const SIDEBAR_WIDTH_KEY = "codeyz_ui_sidebar_width";
+const EXPLORER_WIDTH_KEY = "codeyz_ui_explorer_width";
+const SIDEBAR_MIN = 220;
+const SIDEBAR_MAX = 480;
+const EXPLORER_MIN = 260;
+const EXPLORER_MAX = 560;
+const MAIN_MIN = 520;
 
 function collapseStorageKey(panelId) {
   return `${COLLAPSE_KEY_PREFIX}${panelId}`;
@@ -32,6 +39,76 @@ function initCollapsibles() {
       localStorage.setItem(collapseStorageKey(panelId), collapsed ? "1" : "0");
     });
   }
+}
+
+function clamp(value, minValue, maxValue) {
+  return Math.max(minValue, Math.min(maxValue, value));
+}
+
+function setLayoutWidths(sidebarWidth, explorerWidth) {
+  if (!els.layoutEl) return;
+  const total = els.layoutEl.clientWidth || window.innerWidth;
+  const maxSidebar = Math.min(SIDEBAR_MAX, total - EXPLORER_MIN - MAIN_MIN - 16);
+  const maxExplorer = Math.min(EXPLORER_MAX, total - SIDEBAR_MIN - MAIN_MIN - 16);
+  const nextSidebar = clamp(sidebarWidth, SIDEBAR_MIN, Math.max(SIDEBAR_MIN, maxSidebar));
+  const nextExplorer = clamp(explorerWidth, EXPLORER_MIN, Math.max(EXPLORER_MIN, maxExplorer));
+
+  document.documentElement.style.setProperty("--sidebar-w", `${nextSidebar}px`);
+  document.documentElement.style.setProperty("--explorer-w", `${nextExplorer}px`);
+}
+
+function readLayoutWidths() {
+  const sidebarRaw = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY) || "");
+  const explorerRaw = Number(localStorage.getItem(EXPLORER_WIDTH_KEY) || "");
+  const sidebarWidth = Number.isFinite(sidebarRaw) && sidebarRaw > 0 ? sidebarRaw : 260;
+  const explorerWidth = Number.isFinite(explorerRaw) && explorerRaw > 0 ? explorerRaw : 320;
+  return { sidebarWidth, explorerWidth };
+}
+
+function initResizablePanels() {
+  if (!els.layoutEl || !els.leftResizeHandleEl || !els.rightResizeHandleEl) return;
+
+  const restored = readLayoutWidths();
+  setLayoutWidths(restored.sidebarWidth, restored.explorerWidth);
+
+  const onDrag = (type, event) => {
+    const rect = els.layoutEl.getBoundingClientRect();
+    const current = readLayoutWidths();
+    if (type === "left") {
+      const nextSidebar = event.clientX - rect.left;
+      setLayoutWidths(nextSidebar, current.explorerWidth);
+    } else {
+      const nextExplorer = rect.right - event.clientX;
+      setLayoutWidths(current.sidebarWidth, nextExplorer);
+    }
+    const sidebarPx = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-w"), 10);
+    const explorerPx = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--explorer-w"), 10);
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarPx));
+    localStorage.setItem(EXPLORER_WIDTH_KEY, String(explorerPx));
+  };
+
+  const bindHandle = (handle, type) => {
+    handle.addEventListener("mousedown", (downEvent) => {
+      downEvent.preventDefault();
+      els.layoutEl.classList.add("resizing");
+      const move = (moveEvent) => onDrag(type, moveEvent);
+      const up = () => {
+        els.layoutEl.classList.remove("resizing");
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    });
+  };
+
+  bindHandle(els.leftResizeHandleEl, "left");
+  bindHandle(els.rightResizeHandleEl, "right");
+
+  window.addEventListener("resize", () => {
+    const saved = readLayoutWidths();
+    setLayoutWidths(saved.sidebarWidth, saved.explorerWidth);
+  });
 }
 
 
@@ -288,6 +365,7 @@ export function initUi() {
   autoResizeTextarea();
   renderAttachments();
   initCollapsibles();
+  initResizablePanels();
   bindEvents();
   addMessage("assistant", "CodeYZ UI bereit.");
   scrollChatToBottom();

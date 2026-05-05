@@ -17,6 +17,7 @@ export const state = {
 };
 
 export const els = {
+  layoutEl: document.querySelector(".layout"),
   messagesEl: document.getElementById("messages"),
   formEl: document.getElementById("chat-form"),
   inputEl: document.getElementById("message-input"),
@@ -91,6 +92,8 @@ export const els = {
   searchResultsEl: document.getElementById("search-results"),
   systemStatusEl: document.getElementById("system-status"),
   uiVersionEl: document.getElementById("ui-version"),
+  leftResizeHandleEl: document.getElementById("left-resize-handle"),
+  rightResizeHandleEl: document.getElementById("right-resize-handle"),
 };
 
 export function scrollChatToBottom() {

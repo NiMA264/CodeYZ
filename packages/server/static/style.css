@@ -7,6 +7,9 @@
   --muted: #9ba4b5;
   --accent: #10a37f;
   --border: #2b3242;
+  --sidebar-w: 260px;
+  --explorer-w: 320px;
+  --resize-handle-w: 8px;
 }
 
 * { box-sizing: border-box; }
@@ -16,12 +19,20 @@ body { margin: 0; font-family: "Segoe UI", "Noto Sans", sans-serif; background: 
 .layout {
   height: 100vh;
   display: grid;
-  grid-template-columns: 260px 1fr 320px;
+  grid-template-columns: var(--sidebar-w) var(--resize-handle-w) minmax(0, 1fr) var(--resize-handle-w) var(--explorer-w);
   min-height: 0;
 }
 .sidebar, .explorer-pane { background: rgba(16, 18, 24, 0.95); overflow-y: auto; padding: 10px; min-height: 0; }
 .sidebar { border-right: 1px solid var(--border); }
 .explorer-pane { border-left: 1px solid var(--border); opacity: 0.86; }
+.resize-handle {
+  cursor: col-resize;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.06));
+  border-left: 1px solid rgba(43, 50, 66, 0.6);
+  border-right: 1px solid rgba(43, 50, 66, 0.6);
+}
+.resize-handle:hover { background: rgba(16, 163, 127, 0.18); }
+.layout.resizing { user-select: none; cursor: col-resize; }
 
 .sidebar h1 { margin: 0 0 10px; font-size: 1.05rem; }
 .brand { margin-bottom: 10px; }
@@ -135,11 +146,13 @@ textarea { resize: none; min-height: 42px; max-height: 180px; }
 .hidden { display: none; }
 
 @media (max-width: 1180px) {
-  .layout { grid-template-columns: 260px 1fr; }
+  .layout { grid-template-columns: var(--sidebar-w) var(--resize-handle-w) minmax(0, 1fr); }
+  #right-resize-handle { display: none; }
   .explorer-pane { position: fixed; right: 0; top: 0; bottom: 0; width: 320px; z-index: 5; box-shadow: -8px 0 20px rgba(0,0,0,.4); }
 }
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
+  .resize-handle { display: none; }
   .sidebar { max-height: 34vh; border-right: none; border-bottom: 1px solid var(--border); }
 }
 
