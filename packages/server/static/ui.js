@@ -93,6 +93,7 @@ function readPreferences() {
       scrollTop: Number(localStorage.getItem(SCROLL_KEY) || "0") || 0,
     },
     modeStates: {},
+    onboardingDismissed: false,
     lastUpdated: Date.now(),
   };
 }
@@ -105,6 +106,7 @@ function writePreferences(prefs) {
     history: Array.isArray(prefs.history) ? prefs.history.slice(0, 20) : [],
     session: prefs.session || { lastRunId: "", scrollTop: 0 },
     modeStates: prefs.modeStates && typeof prefs.modeStates === "object" ? prefs.modeStates : {},
+    onboardingDismissed: !!prefs.onboardingDismissed,
     lastUpdated: Date.now(),
   };
   localStorage.setItem(UI_PREFS_KEY, JSON.stringify(safe));
@@ -118,9 +120,23 @@ function patchPreferences(patch) {
     panelState: { ...(current.panelState || {}), ...(patch.panelState || {}) },
     layout: { ...(current.layout || {}), ...(patch.layout || {}) },
     session: { ...(current.session || {}), ...(patch.session || {}) },
+    onboardingDismissed: "onboardingDismissed" in patch ? !!patch.onboardingDismissed : !!current.onboardingDismissed,
   };
   writePreferences(next);
   return next;
+}
+
+function bindOnboardingHint(isFirstLoadWithoutPreferences) {
+  const hintEl = document.getElementById("onboarding-hint");
+  const gotItBtn = document.getElementById("onboarding-got-it");
+  if (!hintEl || !gotItBtn) return;
+  const prefs = readPreferences();
+  const shouldShow = isFirstLoadWithoutPreferences && !prefs.onboardingDismissed;
+  hintEl.classList.toggle("hidden", !shouldShow);
+  gotItBtn.addEventListener("click", () => {
+    patchPreferences({ onboardingDismissed: true });
+    hintEl.classList.add("hidden");
+  });
 }
 
 function hasLegacyUiKeys() {
@@ -1322,6 +1338,7 @@ function bindEvents() {
 }
 
 export function initUi() {
+  const isFirstLoadWithoutPreferences = !localStorage.getItem(UI_PREFS_KEY);
   migrateLegacyPreferencesIfNeeded();
   els.tokenInput.value = getToken();
   els.modelSelect.value = getStored(MODEL_KEY, "gpt-5.4-mini");
@@ -1336,6 +1353,7 @@ export function initUi() {
   initResizablePanels();
   bindEvents();
   bindKeyboardShortcuts();
+  bindOnboardingHint(isFirstLoadWithoutPreferences);
   applyFocusMode(readPreferences().mode || "workflow", false);
   applySummaryDetailExpansion();
   const prefs = readPreferences();

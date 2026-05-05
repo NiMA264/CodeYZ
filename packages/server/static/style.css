@@ -250,3 +250,30 @@ textarea { resize: none; min-height: 42px; max-height: 180px; }
   max-width: 170px;
 }
 
+.onboarding-hint {
+  position: fixed;
+  right: 14px;
+  top: 14px;
+  z-index: 32;
+  width: min(320px, calc(100vw - 28px));
+  background: rgba(20, 24, 33, 0.96);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
+}
+.onboarding-hint h3 {
+  margin: 0 0 8px;
+  font-size: 0.86rem;
+}
+.onboarding-hint ul {
+  margin: 0 0 10px 16px;
+  padding: 0;
+  color: #cdd6e6;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+.onboarding-hint code {
+  color: #d8f7ec;
+}
+
