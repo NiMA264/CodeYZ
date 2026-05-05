@@ -10,6 +10,46 @@ const PHASE_EVENT_MAP = {
   tests: ["test"],
   diff: ["diff"],
 };
+let lastRenderedRunIds = "";
+const RUN_ROW_HEIGHT = 30;
+const RUN_BUFFER = 6;
+const UI_PREFS_KEY = "codeyz_ui_preferences";
+let allRuns = [];
+let visibleRange = { start: -1, end: -1 };
+let pendingVirtualFrame = 0;
+const GROUP_WINDOW_MS = 12_000;
+const GROUP_LABELS = {
+  test: "Test Events",
+  diff: "Patch Updates",
+  approval_required: "Approval Checks",
+  approval_applied: "Approval Applies",
+  plan: "Plan Events",
+  analyze: "Task Events",
+  build: "Build Events",
+  tool_decision: "Tool Decisions",
+  error: "Errors",
+};
+
+function readPrefs() {
+  const raw = localStorage.getItem(UI_PREFS_KEY);
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) || {};
+  } catch {
+    return {};
+  }
+}
+
+function writePrefs(patch) {
+  const current = readPrefs();
+  const next = {
+    ...current,
+    ...patch,
+    session: { ...(current.session || {}), ...(patch.session || {}) },
+    lastUpdated: Date.now(),
+  };
+  localStorage.setItem(UI_PREFS_KEY, JSON.stringify(next));
+}
 
 function setPhaseBadge(el, status) {
   if (!el) return;
@@ -185,6 +225,90 @@ function renderReplay(detail) {
     for (const row of formatTimelineEvent(event)) lines.push(row);
   }
   els.runReplayContentEl.textContent = lines.join("\n");
+  renderEventGroups(detail.events || []);
+}
+
+function parseEventTimestampMs(event, fallbackIndex) {
+  const sources = [event?.created_at, event?.timestamp, event?.time, event?.ts];
+  for (const value of sources) {
+    if (!value) continue;
+    const ms = Date.parse(String(value));
+    if (!Number.isNaN(ms)) return ms;
+  }
+  return fallbackIndex * GROUP_WINDOW_MS;
+}
+
+function toGroupLabel(eventType) {
+  return GROUP_LABELS[eventType] || `${String(eventType || "unknown").replaceAll("_", " ")} events`;
+}
+
+function groupTimelineEvents(events) {
+  const groups = [];
+  for (let i = 0; i < events.length; i += 1) {
+    const ev = events[i];
+    const eventType = String(ev?.event_type || "unknown");
+    const ts = parseEventTimestampMs(ev, i);
+    const last = groups[groups.length - 1];
+    if (last && last.eventType === eventType && ts - last.lastTs <= GROUP_WINDOW_MS) {
+      last.events.push(ev);
+      last.lastTs = ts;
+    } else {
+      groups.push({ eventType, firstTs: ts, lastTs: ts, events: [ev] });
+    }
+  }
+  return groups;
+}
+
+function renderEventGroupDetails(container, group) {
+  const list = document.createElement("div");
+  list.className = "event-group-items";
+  for (const event of group.events) {
+    const item = document.createElement("pre");
+    item.className = "event-group-item";
+    item.textContent = formatTimelineEvent(event).join("\n");
+    list.appendChild(item);
+  }
+  container.appendChild(list);
+}
+
+function renderEventGroups(events) {
+  if (!els.runEventGroupsEl) return;
+  els.runEventGroupsEl.innerHTML = "";
+  if (!Array.isArray(events) || events.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "event-group-empty";
+    empty.textContent = "No events";
+    els.runEventGroupsEl.appendChild(empty);
+    return;
+  }
+  const groups = groupTimelineEvents(events);
+  for (const group of groups) {
+    if (group.events.length === 1) {
+      const single = document.createElement("pre");
+      single.className = "event-group-item event-group-single";
+      single.textContent = formatTimelineEvent(group.events[0]).join("\n");
+      els.runEventGroupsEl.appendChild(single);
+      continue;
+    }
+
+    const details = document.createElement("details");
+    details.className = "event-group";
+    const summary = document.createElement("summary");
+    summary.className = "event-group-summary";
+    summary.textContent = `${group.events.length} ${toGroupLabel(group.eventType)}`;
+    details.appendChild(summary);
+    renderEventGroupDetails(details, group);
+    els.runEventGroupsEl.appendChild(details);
+  }
+}
+
+async function openRun(runId) {
+  state.selectedRunId = runId;
+  const detail = await apiGet(`/task/runs/${encodeURIComponent(runId)}`);
+  renderWorkflowCard(detail);
+  renderToolDecision(detail.events || []);
+  renderApprovalActions(detail.events || []);
+  renderReplay(detail);
 }
 
 async function applyApprovedPatch(eventId) {

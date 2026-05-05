@@ -33,6 +33,7 @@ export const els = {
   previewPinBtn: document.getElementById("preview-pin"),
 
   runsListEl: document.getElementById("runs-list"),
+  runEventGroupsEl: document.getElementById("run-event-groups"),
   runReplayContentEl: document.getElementById("run-replay-content"),
   approvalActionsEl: document.getElementById("approval-actions"),
   tdSearchEl: document.getElementById("td-search"),
