@@ -73,3 +73,48 @@ def test_agent_loop_keeps_normal_patch_errors_as_error_events(monkeypatch: pytes
     events = out["events"]
     assert any(e["event_type"] == "error" for e in events)
     assert not any(e["event_type"] == "approval_required" for e in events)
+
+
+def test_pipeline_diff_events_include_explicit_metadata_for_multiple_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(agent_pipeline, "planner", lambda *_a, **_k: "plan")
+    monkeypatch.setattr(
+        agent_pipeline,
+        "coder",
+        lambda *_a, **_k: {
+            "patches": [
+                {"file_path": "a.py", "unified_diff": "@@ -1,1 +1,1 @@\n-a\n+b"},
+                {"file_path": "b.py", "unified_diff": "@@ -1,1 +1,1 @@\n-x\n+y"},
+            ]
+        },
+    )
+    monkeypatch.setattr(agent_pipeline, "tester", lambda *_a, **_k: "tests ok")
+    monkeypatch.setattr(agent_pipeline, "reviewer", lambda *_a, **_k: "review ok")
+    monkeypatch.setattr(agent_pipeline, "fixer", lambda *_a, **_k: {"patches": []})
+    monkeypatch.setattr(agent_pipeline, "run_build", lambda *_a, **_k: {"ok": True, "output": "ok"})
+    monkeypatch.setattr(agent_pipeline, "run_tests", lambda *_a, **_k: {"ok": True, "output": "ok"})
+
+    def _fake_apply(file_path: str, *_a, **_k):
+        return {
+            "file": file_path,
+            "diff": f"@@ -1,1 +1,1 @@\\n-a\\n+b-{file_path}",
+            "rollback_id": f"rb-{file_path}",
+            "file_status": "modified",
+            "hunks_count": 1,
+            "added_lines": 1,
+            "removed_lines": 1,
+            "risk_level": "low",
+            "approval_required": False,
+            "files_changed_count": 1,
+        }
+
+    monkeypatch.setattr(agent_pipeline, "apply_unified_diff", _fake_apply)
+
+    out = agent_pipeline.run_multi_agent_task("task", access_level="Autonom", model="gpt-5.4-mini")
+    diff_events = [e for e in out["events"] if e["event_type"] == "diff" and isinstance(e.get("data"), dict) and e["data"].get("file")]
+    assert len(diff_events) >= 2
+    for event in diff_events[:2]:
+        data = event["data"]
+        assert data["file_status"] == "modified"
+        assert data["hunks_count"] == 1
+        assert "added_lines" in data
+        assert "removed_lines" in data

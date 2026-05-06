@@ -62,6 +62,24 @@ def test_task_runs_old_records_without_approval_states_are_compatible(monkeypatc
     assert run is not None
     assert run["task"] == "legacy"
     assert runs.has_approval_applied("run-old-1", "evt-legacy") is True
+    assert isinstance(run.get("metrics", {}), dict)
+
+
+def test_task_runs_persist_metrics_in_run_finished_record(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CODEYZ_RUNTIME_ROOT", str(tmp_path))
+    from packages.core import task_runs as task_runs_module
+
+    runs = importlib.reload(task_runs_module)
+    run_id = runs.create_run("metrics persist", "gpt-5.4-mini", "Autonom", profile="fast_fix")
+    runs.add_event(run_id, "diff", "d", {"file": "a.py", "added_lines": 1, "removed_lines": 0, "hunks_count": 1})
+    runs.finish_run(run_id, "done", "ok")
+
+    runs_file = tmp_path / "runs" / "runs.jsonl"
+    lines = runs_file.read_text(encoding="utf-8").splitlines()
+    finished = [json.loads(line) for line in lines if "\"kind\": \"run_finished\"" in line]
+    assert finished
+    assert "metrics" in finished[-1]
+    assert finished[-1]["metrics"]["files_changed_count"] >= 1
 
 
 def test_compact_runs_storage_reduces_redundant_approval_state_records(monkeypatch, tmp_path: Path) -> None:

@@ -6,7 +6,13 @@ from openai import OpenAI
 
 from packages.core.agent_pipeline import run_multi_agent_task
 from packages.core.executor import run_build, run_tests, summarize_errors
-from packages.core.patcher import PatchApprovalRequired, apply_ast_patch, apply_patch, apply_unified_diff
+from packages.core.patcher import (
+    PatchApprovalRequired,
+    apply_ast_patch,
+    apply_patch,
+    apply_unified_diff,
+    build_diff_metadata,
+)
 from packages.core.permissions import assert_can_run_autonomous
 from packages.core.task_runs import add_event, create_run, finish_run, get_run
 from packages.tools.files import list_files, read_file
@@ -89,11 +95,12 @@ def run_autonomous_task(
     access_level: str | None = None,
     use_multi_agent: bool = False,
     max_cost_usd: float | None = None,
+    profile: str | None = None,
 ) -> dict[str, Any]:
     if use_multi_agent:
-        return run_multi_agent_task(task=task, access_level=access_level, model=model, max_cost_usd=max_cost_usd)
+        return run_multi_agent_task(task=task, access_level=access_level, model=model, max_cost_usd=max_cost_usd, profile=profile)
 
-    run_id = create_run(task=task, model=model, access_level=access_level)
+    run_id = create_run(task=task, model=model, access_level=access_level, profile=profile)
     add_event(run_id, "analyze", "Autonomous task started", {"task": task})
 
     try:
@@ -139,7 +146,23 @@ def run_autonomous_task(
                     patch_result = apply_patch(file_path, new_content, access_level=access_level)
                 patch_results.append(patch_result)
                 add_event(run_id, "patch", f"Iteration {iteration}: patched {file_path}", {"file": file_path, "rollback_id": patch_result.get("rollback_id")})
-                add_event(run_id, "diff", f"Iteration {iteration}: diff for {file_path}", {"diff": patch_result.get("diff", ""), "rollback_id": patch_result.get("rollback_id")})
+                add_event(
+                    run_id,
+                    "diff",
+                    f"Iteration {iteration}: diff for {file_path}",
+                    {
+                        "diff": patch_result.get("diff", ""),
+                        "rollback_id": patch_result.get("rollback_id"),
+                        "file": patch_result.get("file", file_path),
+                        "file_status": patch_result.get("file_status", "unknown"),
+                        "hunks_count": patch_result.get("hunks_count", 0),
+                        "added_lines": patch_result.get("added_lines", 0),
+                        "removed_lines": patch_result.get("removed_lines", 0),
+                        "risk_level": patch_result.get("risk_level", "unknown"),
+                        "approval_required": bool(patch_result.get("approval_required", False)),
+                        "files_changed_count": patch_result.get("files_changed_count", 1),
+                    },
+                )
             except PatchApprovalRequired as exc:
                 patch_payload = {"file_path": file_path}
                 if unified_diff:
@@ -148,13 +171,22 @@ def run_autonomous_task(
                     patch_payload["ast_patch"] = ast_patch
                 else:
                     patch_payload["new_content"] = new_content
+                preview = exc.patch_text or unified_diff or str(ast_patch) or new_content
+                meta = build_diff_metadata(
+                    exc.file_path or file_path,
+                    preview,
+                    is_new_file=bool(exc.stats.get("is_new_file")) if isinstance(exc.stats, dict) else False,
+                    risk_level=exc.risk_level,
+                    approval_required=True,
+                )
                 approval_payload = {
                     "file": exc.file_path or file_path,
                     "risk_level": exc.risk_level,
                     "reasons": exc.reasons,
                     "stats": exc.stats,
-                    "patch_preview": (exc.patch_text or unified_diff or str(ast_patch) or new_content)[:1000],
+                    "patch_preview": preview[:1000],
                     "patch": patch_payload,
+                    **meta,
                 }
                 patch_results.append({"file": file_path, "diff": "", "archive": "", "error": str(exc)})
                 add_event(run_id, "approval_required", "High-risk patch requires approval", approval_payload)

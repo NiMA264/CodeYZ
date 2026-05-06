@@ -230,6 +230,8 @@ textarea { resize: none; min-height: 42px; max-height: 180px; }
 
 .approval-actions { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .approval-row { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 12px; }
+.approval-meta { display: grid; gap: 2px; }
+.approval-meta-sub { color: var(--muted); font-size: 11px; }
 .collapsible .collapsible-body {
   max-height: 2000px;
   opacity: 1;
@@ -271,6 +273,88 @@ textarea { resize: none; min-height: 42px; max-height: 180px; }
 .workflow-toggle {
   max-width: 170px;
 }
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.settings-item {
+  display: grid;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.settings-item select,
+.settings-item input {
+  margin: 0;
+}
+.diff-viewer {
+  margin-bottom: 8px;
+}
+.diff-files-list {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+.diff-file-btn {
+  border-radius: 7px;
+  font-size: 0.72rem;
+  padding: 4px 8px;
+}
+.diff-file-btn.active {
+  border-color: #2a8f75;
+  background: rgba(16, 163, 127, 0.2);
+}
+.diff-file-btn.status-added { color: #b9ffd9; }
+.diff-file-btn.status-modified { color: #d7e6ff; }
+.diff-file-btn.status-deleted { color: #ffc9d0; }
+.diff-file-meta {
+  font-size: 0.74rem;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.diff-hunks {
+  display: grid;
+  gap: 8px;
+}
+.diff-hunk {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.diff-hunk-header {
+  background: rgba(21, 27, 37, 0.9);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.72rem;
+  color: #c9d5e8;
+  padding: 5px 8px;
+}
+.diff-lines {
+  display: grid;
+}
+.diff-line {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 2px 8px;
+}
+.diff-line.added { background: rgba(24, 77, 56, 0.45); color: #d3ffe9; }
+.diff-line.removed { background: rgba(93, 42, 54, 0.45); color: #ffd8df; }
+.diff-line.context { background: rgba(15, 20, 29, 0.75); color: #b4c0d3; }
+.diff-line.meta { background: rgba(23, 31, 45, 0.8); color: #9fb0c8; font-style: italic; }
+.run-metrics-panel h2 {
+  margin-bottom: 8px;
+}
+.run-metrics-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 10px;
+  font-size: 0.74rem;
+}
+.run-metric-key { color: var(--muted); }
+.run-metric-value { text-align: right; color: #d7e6ff; }
 
 .focus-mode-bar {
   display: flex;

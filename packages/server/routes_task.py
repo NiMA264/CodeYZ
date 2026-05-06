@@ -24,6 +24,7 @@ class TaskRequest(BaseModel):
     task: str
     model: str | None = None
     access_level: str | None = None
+    profile: str | None = None
     multi_agent: bool | None = None
     max_cost_usd: float | None = None
     role_models: dict[str, str] | None = None
@@ -53,6 +54,7 @@ def task_auto(payload: TaskRequest) -> dict:
         payload.task,
         model=payload.model,
         access_level=payload.access_level,
+        profile=payload.profile,
         use_multi_agent=bool(payload.multi_agent),
         max_cost_usd=payload.max_cost_usd,
     )
@@ -137,6 +139,12 @@ def approve_patch(run_id: str, event_id: str) -> dict:
         "stats": data.get("stats", {}),
         "diff": out.get("diff", ""),
         "rollback_id": out.get("rollback_id", ""),
+        "file_status": out.get("file_status", data.get("file_status", "unknown")),
+        "hunks_count": out.get("hunks_count", data.get("hunks_count", 0)),
+        "added_lines": out.get("added_lines", data.get("added_lines", 0)),
+        "removed_lines": out.get("removed_lines", data.get("removed_lines", 0)),
+        "approval_required": False,
+        "files_changed_count": out.get("files_changed_count", data.get("files_changed_count", 1)),
     }
     applied_event = add_event(run_id, "approval_applied", "Approved patch applied", payload, agent_role="reviewer")
     mark_approval_event(run_id, event_id, "applied")

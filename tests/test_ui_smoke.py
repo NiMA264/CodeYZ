@@ -36,6 +36,11 @@ def test_ui_route_and_module_wiring() -> None:
     assert 'id="explorer"' in html
     assert 'id="runs-list"' in html
     assert 'id="plugins-list"' in html
+    assert 'id="settings-panel"' in html
+    assert 'id="diff-files-list"' in html
+    assert 'id="profile-select"' in html
+    assert 'id="profile-state"' in html
+    assert 'id="run-metrics-summary"' in html
 
 
 @pytest.mark.skipif(
@@ -100,6 +105,11 @@ def test_ui_initializes_without_browser_errors() -> None:
             page.wait_for_selector("#explorer")
             page.wait_for_selector("#runs-list")
             page.wait_for_selector("#plugins-list")
+            page.wait_for_selector("#settings-panel")
+            page.wait_for_selector("#diff-files-list")
+            page.wait_for_selector("#profile-select")
+            page.wait_for_selector("#profile-state")
+            page.wait_for_selector("#run-metrics-summary")
             browser.close()
 
         assert not page_errors, f"browser page errors: {page_errors}"

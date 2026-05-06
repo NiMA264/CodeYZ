@@ -13,6 +13,57 @@ SENSITIVE_NAMES = {"AGENTS.md", "pyproject.toml", "package.json"}
 SENSITIVE_PARTS = {".github", "docker", "installer"}
 
 
+def diff_line_counts(diff_text: str) -> tuple[int, int, int]:
+    additions = 0
+    deletions = 0
+    hunks = 0
+    for line in (diff_text or "").splitlines():
+        if line.startswith("@@"):
+            hunks += 1
+            continue
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            additions += 1
+        elif line.startswith("-"):
+            deletions += 1
+    return additions, deletions, hunks
+
+
+def infer_file_status(diff_text: str, *, is_new_file: bool = False) -> str:
+    if is_new_file:
+        return "added"
+    additions, deletions, _ = diff_line_counts(diff_text)
+    if additions > 0 and deletions == 0:
+        return "added"
+    if deletions > 0 and additions == 0:
+        return "deleted"
+    if additions == 0 and deletions == 0:
+        return "unknown"
+    return "modified"
+
+
+def build_diff_metadata(
+    file_path: str,
+    diff_text: str,
+    *,
+    is_new_file: bool,
+    risk_level: str,
+    approval_required: bool,
+) -> dict[str, object]:
+    additions, deletions, hunks = diff_line_counts(diff_text)
+    return {
+        "file": file_path,
+        "file_status": infer_file_status(diff_text, is_new_file=is_new_file),
+        "hunks_count": hunks,
+        "added_lines": additions,
+        "removed_lines": deletions,
+        "risk_level": risk_level or "unknown",
+        "approval_required": bool(approval_required),
+        "files_changed_count": 1,
+    }
+
+
 class PatchApprovalRequired(PermissionError):
     def __init__(
         self,
@@ -239,7 +290,17 @@ def apply_patch(
         raise
 
     out = _archive_and_write(file_path, target, old_content, new_content)
-    out["risk_level"] = str(risk["level"])
+    risk_level = str(risk["level"])
+    out["risk_level"] = risk_level
+    out.update(
+        build_diff_metadata(
+            file_path,
+            out.get("diff", ""),
+            is_new_file=not exists_before,
+            risk_level=risk_level,
+            approval_required=False,
+        )
+    )
     return out
 
 
@@ -270,7 +331,17 @@ def apply_unified_diff(
 
     new_content = _apply_unified_diff_text(old_content, unified_diff)
     out = _archive_and_write(file_path, target, old_content, new_content)
-    out["risk_level"] = str(risk["level"])
+    risk_level = str(risk["level"])
+    out["risk_level"] = risk_level
+    out.update(
+        build_diff_metadata(
+            file_path,
+            out.get("diff", ""),
+            is_new_file=not exists_before,
+            risk_level=risk_level,
+            approval_required=False,
+        )
+    )
     return out
 
 
@@ -303,5 +374,15 @@ def apply_ast_patch(
         raise
 
     out = _archive_and_write(file_path, target_path, old_content, new_content)
-    out["risk_level"] = str(risk["level"])
+    risk_level = str(risk["level"])
+    out["risk_level"] = risk_level
+    out.update(
+        build_diff_metadata(
+            file_path,
+            out.get("diff", ""),
+            is_new_file=not exists_before,
+            risk_level=risk_level,
+            approval_required=False,
+        )
+    )
     return out

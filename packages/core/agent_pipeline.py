@@ -4,7 +4,13 @@ from packages.core.agents import coder, fixer, planner, reviewer, tester
 from packages.core.costs import BudgetCheck
 from packages.core.executor import run_build, run_tests, summarize_errors
 from packages.core.indexer import search_files
-from packages.core.patcher import PatchApprovalRequired, apply_ast_patch, apply_patch, apply_unified_diff
+from packages.core.patcher import (
+    PatchApprovalRequired,
+    apply_ast_patch,
+    apply_patch,
+    apply_unified_diff,
+    build_diff_metadata,
+)
 from packages.core.plugins import call_plugin
 from packages.core.permissions import (
     assert_can_run_autonomous,
@@ -67,6 +73,14 @@ def _apply_patches(patches: list[dict], access_level: str | None, run_id: str | 
                 patch_payload["ast_patch"] = ast_patch
             else:
                 patch_payload["new_content"] = new_content
+            preview = exc.patch_text or unified_diff or str(ast_patch) or new_content
+            meta = build_diff_metadata(
+                exc.file_path or file_path,
+                preview,
+                is_new_file=bool(exc.stats.get("is_new_file")) if isinstance(exc.stats, dict) else False,
+                risk_level=exc.risk_level,
+                approval_required=True,
+            )
             if run_id is not None:
                 _add_cost_event(
                     run_id,
@@ -77,9 +91,10 @@ def _apply_patches(patches: list[dict], access_level: str | None, run_id: str | 
                         "risk_level": exc.risk_level,
                         "reasons": exc.reasons,
                         "stats": exc.stats,
-                        "patch_preview": (exc.patch_text or unified_diff or str(ast_patch) or new_content)[:1000],
+                        "patch_preview": preview[:1000],
                         "patch": patch_payload,
                         "iteration": iteration or 0,
+                        **meta,
                     },
                     "coder",
                 )
@@ -126,8 +141,9 @@ def run_multi_agent_task(
     access_level: str | None,
     model: str | None,
     max_cost_usd: float | None = None,
+    profile: str | None = None,
 ) -> dict[str, Any]:
-    run_id = create_run(task=task, model=model, access_level=access_level)
+    run_id = create_run(task=task, model=model, access_level=access_level, profile=profile)
     budget = BudgetCheck(max_cost_usd=max_cost_usd or 0.5)
 
     _add_cost_event(run_id, "analyze", "Multi-agent task started", {"task": task, "max_cost_usd": budget.max_cost_usd}, "planner")
@@ -187,7 +203,19 @@ def run_multi_agent_task(
         if can_write_files(access_level):
             patch_results = _apply_patches(code_meta.get("json", {}).get("patches", []), access_level, run_id=run_id, iteration=i)
             for p in patch_results:
-                _add_cost_event(run_id, "diff", f"Iteration {i}: diff {p.get('file', '')}", {"diff": p.get("diff", ""), "rollback_id": p.get("rollback_id", "")}, "coder")
+                payload = {
+                    "diff": p.get("diff", ""),
+                    "rollback_id": p.get("rollback_id", ""),
+                    "file": p.get("file", ""),
+                    "file_status": p.get("file_status", "unknown"),
+                    "hunks_count": p.get("hunks_count", 0),
+                    "added_lines": p.get("added_lines", 0),
+                    "removed_lines": p.get("removed_lines", 0),
+                    "risk_level": p.get("risk_level", "unknown"),
+                    "approval_required": bool(p.get("approval_required", False)),
+                    "files_changed_count": p.get("files_changed_count", 1),
+                }
+                _add_cost_event(run_id, "diff", f"Iteration {i}: diff {p.get('file', '')}", payload, "coder")
         iteration["patches"] = patch_results
 
         build_result = {"ok": False, "output": "Build not permitted"}

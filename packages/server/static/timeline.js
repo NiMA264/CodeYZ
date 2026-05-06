@@ -1,7 +1,7 @@
 ﻿import { apiGet, apiPost } from "./api.js";
 import { formatTimelineEvent } from "./event_format.js";
 import { els, state } from "./state.js";
-import { extractApprovalActions } from "./timeline_helpers.js";
+import { collectDiffFilesFromEvents, extractApprovalActions } from "./timeline_helpers.js";
 
 const PHASE_KEYS = ["task", "plan", "patch", "tests", "diff", "approval"];
 const PHASE_EVENT_MAP = {
@@ -17,6 +17,8 @@ const UI_PREFS_KEY = "codeyz_ui_preferences";
 let allRuns = [];
 let visibleRange = { start: -1, end: -1 };
 let pendingVirtualFrame = 0;
+let currentDiffFiles = [];
+let selectedDiffFile = "";
 const GROUP_WINDOW_MS = 12_000;
 const GROUP_LABELS = {
   test: "Test Events",
@@ -211,6 +213,112 @@ export function renderToolDecision(events) {
   els.tdReasoningEl.textContent = data.reasoning || "Keine Tool-Entscheidung für diesen Run.";
 }
 
+function renderDiffHunks(fileEntry) {
+  if (!els.diffHunksEl) return;
+  els.diffHunksEl.innerHTML = "";
+  if (!fileEntry || !Array.isArray(fileEntry.hunks) || fileEntry.hunks.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "event-group-empty";
+    empty.textContent = "Keine Diff-Hunks verfügbar.";
+    els.diffHunksEl.appendChild(empty);
+    return;
+  }
+
+  for (const hunk of fileEntry.hunks) {
+    const block = document.createElement("div");
+    block.className = "diff-hunk";
+
+    const header = document.createElement("div");
+    header.className = "diff-hunk-header";
+    header.textContent = hunk.header || "@@";
+    block.appendChild(header);
+
+    const lines = document.createElement("div");
+    lines.className = "diff-lines";
+    for (const line of hunk.lines || []) {
+      const row = document.createElement("div");
+      row.className = `diff-line ${line.type || "context"}`;
+      row.textContent = String(line.text || "");
+      lines.appendChild(row);
+    }
+    block.appendChild(lines);
+    els.diffHunksEl.appendChild(block);
+  }
+}
+
+function renderDiffViewer(events) {
+  if (!els.diffFilesListEl || !els.diffFileMetaEl || !els.diffHunksEl) return;
+  currentDiffFiles = collectDiffFilesFromEvents(events || []);
+  els.diffFilesListEl.innerHTML = "";
+
+  if (currentDiffFiles.length === 0) {
+    selectedDiffFile = "";
+    els.diffFileMetaEl.textContent = "Keine Patch-Dateien für diesen Run.";
+    renderDiffHunks(null);
+    return;
+  }
+
+  const hasSelected = currentDiffFiles.some((entry) => entry.file === selectedDiffFile);
+  if (!hasSelected) selectedDiffFile = currentDiffFiles[0].file;
+
+  for (const entry of currentDiffFiles) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `diff-file-btn status-${entry.status || "modified"}${entry.file === selectedDiffFile ? " active" : ""}`;
+    btn.textContent = `${entry.file} (${entry.status || "modified"})`;
+    btn.addEventListener("click", () => {
+      selectedDiffFile = entry.file;
+      renderDiffViewer(events);
+    });
+    els.diffFilesListEl.appendChild(btn);
+  }
+
+  const selected = currentDiffFiles.find((entry) => entry.file === selectedDiffFile) || currentDiffFiles[0];
+  const hunkCount = Number(selected.hunksCount || (Array.isArray(selected.hunks) ? selected.hunks.length : 0)) || 0;
+  const add = Number(selected.addedLines || 0) || 0;
+  const rem = Number(selected.removedLines || 0) || 0;
+  els.diffFileMetaEl.textContent = `Datei: ${selected.file} | Status: ${selected.status || "unknown"} | Hunks: ${hunkCount} | +${add}/-${rem}`;
+  renderDiffHunks(selected);
+}
+
+function formatDuration(durationMs) {
+  const n = Number(durationMs || 0);
+  if (!Number.isFinite(n) || n <= 0) return "0s";
+  const totalSec = Math.floor(n / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (min <= 0) return `${sec}s`;
+  return `${min}m ${sec}s`;
+}
+
+function renderRunMetrics(detail) {
+  if (!els.runMetricsSummaryEl) return;
+  const metrics = detail && typeof detail.metrics === "object" ? detail.metrics : {};
+  const rows = [
+    ["Duration", formatDuration(metrics.duration_ms)],
+    ["Files changed", metrics.files_changed_count ?? "0"],
+    ["Added lines", metrics.added_lines ?? "0"],
+    ["Removed lines", metrics.removed_lines ?? "0"],
+    ["Hunks", metrics.hunks_count ?? "0"],
+    ["Risk", metrics.risk_level_summary || "unknown"],
+    ["Approvals", `${metrics.approvals_applied ?? 0}/${metrics.approvals_requested ?? 0}`],
+    ["Patches applied", metrics.patches_applied ?? "0"],
+    ["Status", metrics.final_status || detail?.status || "unknown"],
+    ["Profile", metrics.profile || detail?.profile || "custom"],
+  ];
+  els.runMetricsSummaryEl.innerHTML = "";
+  for (const [key, value] of rows) {
+    const k = document.createElement("span");
+    k.className = "run-metric-key";
+    k.textContent = `${key}:`;
+    const v = document.createElement("span");
+    v.className = "run-metric-value";
+    v.textContent = String(value ?? "-");
+    els.runMetricsSummaryEl.appendChild(k);
+    els.runMetricsSummaryEl.appendChild(v);
+  }
+}
+
 function renderReplay(detail) {
   const lines = [];
   lines.push(`Run: ${detail.run_id}`);
@@ -225,6 +333,8 @@ function renderReplay(detail) {
     for (const row of formatTimelineEvent(event)) lines.push(row);
   }
   els.runReplayContentEl.textContent = lines.join("\n");
+  renderRunMetrics(detail);
+  renderDiffViewer(detail.events || []);
   renderEventGroups(detail.events || []);
 }
 
@@ -329,25 +439,33 @@ function renderApprovalActions(events) {
     const row = document.createElement("div");
     row.className = "approval-row";
 
-    const label = document.createElement("span");
-    label.textContent = action.alreadyApplied
-      ? `${action.file} (${action.riskLevel}) - applied`
-      : `${action.file} (${action.riskLevel})`;
+    const labelWrap = document.createElement("div");
+    labelWrap.className = "approval-meta";
+    const line1 = document.createElement("div");
+    line1.textContent = `${action.file} | risk=${action.riskLevel} | status=${action.fileStatus || "unknown"}`;
+    const line2 = document.createElement("div");
+    line2.className = "approval-meta-sub";
+    line2.textContent = `files=${action.filesChangedCount} hunks=${action.hunksCount} +${action.addedLines}/-${action.removedLines} approval=${action.approvalRequired ? "required" : "not-required"}`;
+    const line3 = document.createElement("div");
+    line3.className = "approval-meta-sub";
+    line3.textContent = `affected: ${(action.affectedFiles || [action.file]).join(", ")}`;
+    labelWrap.appendChild(line1);
+    labelWrap.appendChild(line2);
+    labelWrap.appendChild(line3);
 
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "run-item";
-    btn.textContent = "Apply approved patch";
+    btn.textContent = action.buttonLabel || "Approve and apply";
     if (action.alreadyApplied) {
       btn.disabled = true;
-      btn.textContent = "Already applied";
     }
     btn.addEventListener("click", async () => {
       if (action.alreadyApplied) return;
       await applyApprovedPatch(action.eventId);
     });
 
-    row.appendChild(label);
+    row.appendChild(labelWrap);
     row.appendChild(btn);
     els.approvalActionsEl.appendChild(row);
   }

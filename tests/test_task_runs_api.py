@@ -1,6 +1,6 @@
 ﻿from fastapi.testclient import TestClient
 
-from packages.core.task_runs import add_event, claim_approval_event, create_run, mark_approval_event
+from packages.core.task_runs import add_event, claim_approval_event, create_run, finish_run, mark_approval_event
 from packages.server.app import app
 
 
@@ -12,6 +12,21 @@ def test_task_runs_endpoint_returns_data(monkeypatch) -> None:
     res = client.get("/task/runs", headers={"x-api-key": "token123"})
     assert res.status_code == 200
     assert any(item["run_id"] == run_id for item in res.json()["runs"])
+
+
+def test_task_run_detail_exposes_metrics(monkeypatch) -> None:
+    monkeypatch.setenv("CODEYZ_LOCAL_TOKEN", "token123")
+    run_id = create_run("Task metrics api", "gpt-5.4-mini", "Autonom", profile="safe_mode")
+    add_event(run_id, "diff", "d", {"file": "a.py", "added_lines": 1, "removed_lines": 1, "hunks_count": 1})
+    finish_run(run_id, "done", "ok")
+
+    client = TestClient(app)
+    res = client.get(f"/task/runs/{run_id}", headers={"x-api-key": "token123"})
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["profile"] == "safe_mode"
+    assert isinstance(payload.get("metrics"), dict)
+    assert payload["metrics"]["files_changed_count"] >= 1
 
 
 def test_task_run_detail_preserves_approval_required_event(monkeypatch) -> None:
@@ -90,6 +105,10 @@ def test_approve_patch_applies_exact_stored_patch_and_emits_event(monkeypatch, t
         assert payload["ok"] is True
         assert payload["event"]["event_type"] == "approval_applied"
         assert payload["event"]["data"]["source_event_id"] == event["event_id"]
+        assert payload["event"]["data"]["file_status"] in {"added", "modified", "deleted", "unknown"}
+        assert "added_lines" in payload["event"]["data"]
+        assert "removed_lines" in payload["event"]["data"]
+        assert payload["event"]["data"]["approval_required"] is False
         assert payload["result"]["rollback_id"]
         assert "line2-approved" in target.read_text(encoding="utf-8")
     finally:

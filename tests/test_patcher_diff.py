@@ -22,6 +22,11 @@ def test_apply_unified_diff_small_hunk(tmp_path: Path) -> None:
     out = apply_unified_diff("a.txt", diff_text, access_level=FILES)
     assert out["file"] == "a.txt"
     assert out["risk_level"] == "low"
+    assert out["file_status"] == "modified"
+    assert out["hunks_count"] >= 1
+    assert out["added_lines"] >= 1
+    assert out["removed_lines"] >= 1
+    assert out["approval_required"] is False
     assert "line2-updated" in target.read_text(encoding="utf-8")
 
 

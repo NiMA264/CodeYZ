@@ -68,6 +68,18 @@
           <details id="run-replay" class="run-replay">
             <summary>Replay</summary>
             <div id="approval-actions" class="approval-actions"></div>
+            <section class="panel run-metrics-panel">
+              <h2>Run Summary</h2>
+              <div id="run-metrics-summary" class="run-metrics-summary">Keine Metriken verfügbar.</div>
+            </section>
+            <section class="diff-viewer panel">
+              <div class="row">
+                <h2>Patch Diff Viewer</h2>
+              </div>
+              <div id="diff-files-list" class="diff-files-list"></div>
+              <div id="diff-file-meta" class="diff-file-meta">Keine Datei ausgewählt.</div>
+              <div id="diff-hunks" class="diff-hunks"></div>
+            </section>
             <div id="run-event-groups" class="run-event-groups"></div>
             <pre id="run-replay-content">Kein Run ausgewählt.</pre>
           </details>
@@ -157,6 +169,92 @@
         </div>
       </section>
 
+      <section id="settings-panel" class="panel collapsible" data-collapsible data-panel-id="settings">
+        <button type="button" class="collapse-toggle" data-collapse-toggle aria-expanded="false">
+          <span>Settings</span>
+          <span class="collapse-icon">&#9662;</span>
+        </button>
+        <div class="collapsible-body">
+          <div class="settings-grid">
+            <label class="settings-item">
+              <span>Profile</span>
+              <select id="profile-select" class="pill">
+                <option value="custom">Custom</option>
+                <option value="review">Review</option>
+                <option value="fast_fix">Fast Fix</option>
+                <option value="safe_mode">Safe Mode</option>
+                <option value="autonomous">Autonomous</option>
+              </select>
+            </label>
+            <div class="settings-item">
+              <span>Profile Status</span>
+              <span id="profile-state" class="context-pill">Custom</span>
+            </div>
+            <label class="settings-item">
+              <span>Model</span>
+              <select id="model-select" class="pill">
+                <option>gpt-5.4-mini</option>
+                <option>gpt-5.4</option>
+                <option>gpt-5.5</option>
+              </select>
+            </label>
+            <label class="settings-item">
+              <span>Mode</span>
+              <select id="mode-select" class="pill">
+                <option>Chat</option>
+                <option>Code</option>
+                <option>Review</option>
+                <option>Fix</option>
+                <option>Projekt planen</option>
+              </select>
+            </label>
+            <label class="settings-item">
+              <span>Access</span>
+              <select id="access-select" class="pill">
+                <option>Nur lesen</option>
+                <option>Dateien ändern</option>
+                <option>Tests ausführen</option>
+                <option>Autonom</option>
+                <option disabled>Gefährlich deaktiviert</option>
+              </select>
+            </label>
+            <label class="settings-item">
+              <span>Budget ($)</span>
+              <input id="budget-input" type="number" min="0" step="0.01" placeholder="Budget $" />
+            </label>
+            <label class="plan-toggle"><input id="multi-agent" type="checkbox" /><span>Multi-Agent Mode</span></label>
+            <label class="plan-toggle">
+              <input id="plan-mode" type="checkbox" />
+              <span>Planmodus</span>
+            </label>
+          </div>
+
+          <details class="panel role-models-panel">
+            <summary>Role Models</summary>
+            <div class="row">
+              <span>Planner</span>
+              <select id="rm-planner" class="pill"><option>gpt-5.5</option><option>gpt-5.4</option><option>gpt-5.4-mini</option></select>
+            </div>
+            <div class="row">
+              <span>Coder</span>
+              <select id="rm-coder" class="pill"><option>gpt-5.4</option><option>gpt-5.5</option><option>gpt-5.4-mini</option></select>
+            </div>
+            <div class="row">
+              <span>Tester</span>
+              <select id="rm-tester" class="pill"><option>gpt-5.4-mini</option><option>gpt-5.4</option><option>gpt-5.5</option></select>
+            </div>
+            <div class="row">
+              <span>Reviewer</span>
+              <select id="rm-reviewer" class="pill"><option>gpt-5.5</option><option>gpt-5.4</option><option>gpt-5.4-mini</option></select>
+            </div>
+            <div class="row">
+              <span>Fixer</span>
+              <select id="rm-fixer" class="pill"><option>gpt-5.4</option><option>gpt-5.5</option><option>gpt-5.4-mini</option></select>
+            </div>
+          </details>
+        </div>
+      </section>
+
       <section id="messages" class="messages" aria-live="polite"></section>
 
       <div id="attachments" class="attachments"></div>
@@ -164,56 +262,8 @@
       <form id="chat-form" class="composer">
         <div class="composer-top">
           <button id="attach-btn" type="button" class="pill" aria-label="Attach files">+</button>
-          <select id="model-select" class="pill">
-            <option>gpt-5.4-mini</option>
-            <option>gpt-5.4</option>
-            <option>gpt-5.5</option>
-          </select>
-          <select id="mode-select" class="pill">
-            <option>Chat</option>
-            <option>Code</option>
-            <option>Review</option>
-            <option>Fix</option>
-            <option>Projekt planen</option>
-          </select>
-          <select id="access-select" class="pill">
-            <option>Nur lesen</option>
-            <option>Dateien ändern</option>
-            <option>Tests ausführen</option>
-            <option>Autonom</option>
-            <option disabled>Gefährlich deaktiviert</option>
-          </select>
-          <label class="plan-toggle"><input id="multi-agent" type="checkbox" /><span>Multi-Agent Mode</span></label>
-          <label class="plan-toggle">
-            <input id="plan-mode" type="checkbox" />
-            <span>Planmodus</span>
-          </label>
-          <input id="budget-input" type="number" min="0" step="0.01" placeholder="Budget $" />
+          <button id="toggle-settings" type="button" class="pill">Settings</button>
         </div>
-
-        <details class="panel role-models-panel">
-          <summary>Role Models</summary>
-          <div class="row">
-            <span>Planner</span>
-            <select id="rm-planner" class="pill"><option>gpt-5.5</option><option>gpt-5.4</option><option>gpt-5.4-mini</option></select>
-          </div>
-          <div class="row">
-            <span>Coder</span>
-            <select id="rm-coder" class="pill"><option>gpt-5.4</option><option>gpt-5.5</option><option>gpt-5.4-mini</option></select>
-          </div>
-          <div class="row">
-            <span>Tester</span>
-            <select id="rm-tester" class="pill"><option>gpt-5.4-mini</option><option>gpt-5.4</option><option>gpt-5.5</option></select>
-          </div>
-          <div class="row">
-            <span>Reviewer</span>
-            <select id="rm-reviewer" class="pill"><option>gpt-5.5</option><option>gpt-5.4</option><option>gpt-5.4-mini</option></select>
-          </div>
-          <div class="row">
-            <span>Fixer</span>
-            <select id="rm-fixer" class="pill"><option>gpt-5.4</option><option>gpt-5.5</option><option>gpt-5.4-mini</option></select>
-          </div>
-        </details>
 
         <textarea id="message-input" rows="2" placeholder="Nachricht an CodeYZ..."></textarea>
 

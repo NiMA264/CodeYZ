@@ -2,7 +2,7 @@
 import { addApiErrorMessage, addMessage, autoResizeTextarea, renderAttachments, runAutonomousTask, sendMessage } from "./chat.js";
 import { loadFilePreview, renderExplorer, renderSearchResults, setSelectedFile } from "./explorer.js";
 import { refreshPlugins } from "./plugins.js";
-import { ACCESS_KEY, els, MODEL_KEY, MODE_KEY, PLAN_KEY, scrollChatToBottom, state, TOKEN_KEY } from "./state.js";
+import { ACCESS_KEY, els, MODEL_KEY, MODE_KEY, PLAN_KEY, PROFILE_KEY, scrollChatToBottom, state, TOKEN_KEY } from "./state.js";
 import { refreshRollbacks, refreshRuns } from "./timeline.js";
 
 const COLLAPSE_KEY_PREFIX = "codeyz_ui_collapsed_";
@@ -23,22 +23,22 @@ const SIDEBAR_SNAP_POINTS = [240, 320];
 const EXPLORER_SNAP_POINTS = [300, 420];
 const FOCUS_MODES = ["workflow", "code", "chat"];
 const collapsiblePanels = new Map();
-const MODE_PANELS = ["sidebar", "workflow", "explorer", "timeline", "plugins", "tool_decision"];
+const MODE_PANELS = ["sidebar", "workflow", "settings", "explorer", "timeline", "plugins", "tool_decision"];
 const MODE_DEFAULTS = {
   workflow: {
     sidebarWidth: 260,
     explorerWidth: 300,
-    panels: { sidebar: false, workflow: false, explorer: true, timeline: false, plugins: true, tool_decision: false },
+    panels: { sidebar: false, workflow: false, settings: true, explorer: true, timeline: false, plugins: true, tool_decision: false },
   },
   code: {
     sidebarWidth: 320,
     explorerWidth: 420,
-    panels: { sidebar: false, workflow: true, explorer: false, timeline: true, plugins: true, tool_decision: true },
+    panels: { sidebar: false, workflow: true, settings: false, explorer: false, timeline: true, plugins: true, tool_decision: true },
   },
   chat: {
     sidebarWidth: 220,
     explorerWidth: 260,
-    panels: { sidebar: true, workflow: true, explorer: true, timeline: true, plugins: true, tool_decision: true },
+    panels: { sidebar: true, workflow: true, settings: false, explorer: true, timeline: true, plugins: true, tool_decision: true },
   },
 };
 let currentFocusMode = null;
@@ -57,6 +57,58 @@ const MAX_HISTORY = 50;
 let suspendHistory = false;
 let commandInputDebounce = null;
 let resizeDebounce = null;
+let suspendProfileSync = false;
+
+const PROFILE_DEFS = {
+  review: {
+    label: "Review",
+    settings: {
+      model: "gpt-5.4-mini",
+      mode: "Review",
+      access: "Nur lesen",
+      planMode: true,
+      multiAgent: false,
+      budget: 0.5,
+      roleModels: { planner: "gpt-5.4", coder: "gpt-5.4-mini", tester: "gpt-5.4-mini", reviewer: "gpt-5.5", fixer: "gpt-5.4-mini" },
+    },
+  },
+  fast_fix: {
+    label: "Fast Fix",
+    settings: {
+      model: "gpt-5.4",
+      mode: "Fix",
+      access: "Dateien ändern",
+      planMode: false,
+      multiAgent: false,
+      budget: 1.5,
+      roleModels: { planner: "gpt-5.4-mini", coder: "gpt-5.4", tester: "gpt-5.4-mini", reviewer: "gpt-5.4", fixer: "gpt-5.4" },
+    },
+  },
+  safe_mode: {
+    label: "Safe Mode",
+    settings: {
+      model: "gpt-5.4-mini",
+      mode: "Review",
+      access: "Nur lesen",
+      planMode: true,
+      multiAgent: false,
+      budget: 0.25,
+      roleModels: { planner: "gpt-5.4-mini", coder: "gpt-5.4-mini", tester: "gpt-5.4-mini", reviewer: "gpt-5.4", fixer: "gpt-5.4-mini" },
+    },
+  },
+  autonomous: {
+    label: "Autonomous",
+    settings: {
+      model: "gpt-5.5",
+      mode: "Code",
+      access: "Autonom",
+      planMode: false,
+      multiAgent: true,
+      budget: 5.0,
+      roleModels: { planner: "gpt-5.5", coder: "gpt-5.4", tester: "gpt-5.4-mini", reviewer: "gpt-5.5", fixer: "gpt-5.4" },
+    },
+  },
+};
 
 function collapseStorageKey(panelId) {
   return `${COLLAPSE_KEY_PREFIX}${panelId}`;
@@ -1241,6 +1293,113 @@ function friendlyError(err) {
   return `Fehler: ${msg}`;
 }
 
+function currentRoleModels() {
+  return {
+    planner: els.rmPlannerEl.value,
+    coder: els.rmCoderEl.value,
+    tester: els.rmTesterEl.value,
+    reviewer: els.rmReviewerEl.value,
+    fixer: els.rmFixerEl.value,
+  };
+}
+
+function applyRoleModels(roleModels) {
+  if (!roleModels || typeof roleModels !== "object") return;
+  if (roleModels.planner) els.rmPlannerEl.value = String(roleModels.planner);
+  if (roleModels.coder) els.rmCoderEl.value = String(roleModels.coder);
+  if (roleModels.tester) els.rmTesterEl.value = String(roleModels.tester);
+  if (roleModels.reviewer) els.rmReviewerEl.value = String(roleModels.reviewer);
+  if (roleModels.fixer) els.rmFixerEl.value = String(roleModels.fixer);
+}
+
+function normalizeBudgetValue(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100) / 100;
+}
+
+function getCurrentSettingsSnapshot() {
+  return {
+    model: String(els.modelSelect.value || ""),
+    mode: String(els.modeSelect.value || ""),
+    access: String(els.accessSelect.value || ""),
+    planMode: !!els.planModeEl.checked,
+    multiAgent: !!els.multiAgentEl.checked,
+    budget: normalizeBudgetValue(els.budgetInputEl.value),
+    roleModels: currentRoleModels(),
+  };
+}
+
+function isSameProfileSettings(settings, snapshot) {
+  const budgetA = normalizeBudgetValue(settings?.budget);
+  const budgetB = normalizeBudgetValue(snapshot?.budget);
+  const rolesA = settings?.roleModels || {};
+  const rolesB = snapshot?.roleModels || {};
+  return (
+    String(settings?.model || "") === String(snapshot?.model || "") &&
+    String(settings?.mode || "") === String(snapshot?.mode || "") &&
+    String(settings?.access || "") === String(snapshot?.access || "") &&
+    !!settings?.planMode === !!snapshot?.planMode &&
+    !!settings?.multiAgent === !!snapshot?.multiAgent &&
+    budgetA === budgetB &&
+    String(rolesA.planner || "") === String(rolesB.planner || "") &&
+    String(rolesA.coder || "") === String(rolesB.coder || "") &&
+    String(rolesA.tester || "") === String(rolesB.tester || "") &&
+    String(rolesA.reviewer || "") === String(rolesB.reviewer || "") &&
+    String(rolesA.fixer || "") === String(rolesB.fixer || "")
+  );
+}
+
+function updateProfileUi(profileKey) {
+  const key = PROFILE_DEFS[profileKey] ? profileKey : "custom";
+  if (els.profileSelect) els.profileSelect.value = key;
+  if (els.profileStateEl) {
+    const label = PROFILE_DEFS[key]?.label || "Custom";
+    els.profileStateEl.textContent = label;
+  }
+}
+
+function syncProfileStateFromCurrentSettings() {
+  if (suspendProfileSync) return;
+  const snapshot = getCurrentSettingsSnapshot();
+  for (const [key, profile] of Object.entries(PROFILE_DEFS)) {
+    if (isSameProfileSettings(profile.settings, snapshot)) {
+      setStored(PROFILE_KEY, key);
+      updateProfileUi(key);
+      return;
+    }
+  }
+  setStored(PROFILE_KEY, "custom");
+  updateProfileUi("custom");
+}
+
+function applyProfile(profileKey) {
+  const profile = PROFILE_DEFS[profileKey];
+  if (!profile) {
+    updateProfileUi("custom");
+    return;
+  }
+  const settings = profile.settings;
+  suspendProfileSync = true;
+  try {
+    els.modelSelect.value = settings.model;
+    els.modeSelect.value = settings.mode;
+    els.accessSelect.value = settings.access;
+    els.planModeEl.checked = !!settings.planMode;
+    els.multiAgentEl.checked = !!settings.multiAgent;
+    els.budgetInputEl.value = String(settings.budget);
+    applyRoleModels(settings.roleModels);
+    setStored(MODEL_KEY, els.modelSelect.value);
+    setStored(MODE_KEY, els.modeSelect.value);
+    setStored(ACCESS_KEY, els.accessSelect.value);
+    setStored(PLAN_KEY, els.planModeEl.checked ? "1" : "0");
+    setStored(PROFILE_KEY, profileKey);
+    updateProfileUi(profileKey);
+  } finally {
+    suspendProfileSync = false;
+  }
+}
+
 function renderPre(el, value) {
   if (typeof value === "string") el.textContent = value || "-";
   else el.textContent = JSON.stringify(value, null, 2);
@@ -1340,10 +1499,44 @@ function bindEvents() {
     renderAttachments();
   });
 
-  els.modelSelect.addEventListener("change", () => setStored(MODEL_KEY, els.modelSelect.value));
-  els.modeSelect.addEventListener("change", () => setStored(MODE_KEY, els.modeSelect.value));
-  els.accessSelect.addEventListener("change", () => setStored(ACCESS_KEY, els.accessSelect.value));
-  els.planModeEl.addEventListener("change", () => setStored(PLAN_KEY, els.planModeEl.checked ? "1" : "0"));
+  els.modelSelect.addEventListener("change", () => {
+    setStored(MODEL_KEY, els.modelSelect.value);
+    syncProfileStateFromCurrentSettings();
+  });
+  els.modeSelect.addEventListener("change", () => {
+    setStored(MODE_KEY, els.modeSelect.value);
+    syncProfileStateFromCurrentSettings();
+  });
+  els.accessSelect.addEventListener("change", () => {
+    setStored(ACCESS_KEY, els.accessSelect.value);
+    syncProfileStateFromCurrentSettings();
+  });
+  els.planModeEl.addEventListener("change", () => {
+    setStored(PLAN_KEY, els.planModeEl.checked ? "1" : "0");
+    syncProfileStateFromCurrentSettings();
+  });
+  if (els.profileSelect) {
+    els.profileSelect.addEventListener("change", () => {
+      const key = String(els.profileSelect.value || "custom");
+      if (key === "custom") {
+        setStored(PROFILE_KEY, "custom");
+        updateProfileUi("custom");
+        return;
+      }
+      applyProfile(key);
+    });
+  }
+  if (els.multiAgentEl) {
+    els.multiAgentEl.addEventListener("change", syncProfileStateFromCurrentSettings);
+  }
+  if (els.budgetInputEl) {
+    els.budgetInputEl.addEventListener("input", syncProfileStateFromCurrentSettings);
+    els.budgetInputEl.addEventListener("change", syncProfileStateFromCurrentSettings);
+  }
+  [els.rmPlannerEl, els.rmCoderEl, els.rmTesterEl, els.rmReviewerEl, els.rmFixerEl].forEach((el) => {
+    if (!el) return;
+    el.addEventListener("change", syncProfileStateFromCurrentSettings);
+  });
 
   els.autoBtn.addEventListener("click", async () => {
     const task = els.inputEl.value.trim();
@@ -1432,6 +1625,14 @@ function bindEvents() {
   if (els.focusChatBtn) {
     els.focusChatBtn.addEventListener("click", () => applyFocusMode("chat"));
   }
+  if (els.toggleSettingsBtn) {
+    els.toggleSettingsBtn.addEventListener("click", () => {
+      setPanelCollapsed("settings", false, true);
+      if (currentFocusMode) saveFocusModeState(currentFocusMode);
+      const panel = document.getElementById("settings-panel");
+      if (panel instanceof HTMLElement) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  }
   if (els.commandBackdropEl) {
     els.commandBackdropEl.addEventListener("click", closeCommandPalette);
   }
@@ -1462,6 +1663,7 @@ export function initUi() {
   els.modeSelect.value = getStored(MODE_KEY, "Chat");
   els.accessSelect.value = getStored(ACCESS_KEY, "Nur lesen");
   els.planModeEl.checked = getStored(PLAN_KEY, "0") === "1";
+  const storedProfile = getStored(PROFILE_KEY, "custom");
 
   setSelectedFile("");
   autoResizeTextarea();
@@ -1479,6 +1681,12 @@ export function initUi() {
     els.messagesEl.scrollTop = Number(prefs.session.scrollTop) || 0;
   }
   if (prefs.session?.lastRunId) patchPreferences({ session: { lastRunId: prefs.session.lastRunId } });
+  if (PROFILE_DEFS[storedProfile]) {
+    applyProfile(storedProfile);
+  } else {
+    updateProfileUi("custom");
+    syncProfileStateFromCurrentSettings();
+  }
   addMessage("assistant", "CodeYZ UI bereit.");
   if (prefs.session?.lastRunId) showToast("Session restored");
   if (!prefs.session?.lastRunId) scrollChatToBottom();

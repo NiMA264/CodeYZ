@@ -95,6 +95,7 @@ export async function runAutonomousTask(task, refreshRuns, refreshRollbacks) {
     const payload = {
       task,
       model: stateComposer.selectedModel,
+      profile: stateComposer.selectedProfile,
       access_level: stateComposer.accessLevel,
       multi_agent: !!els.multiAgentEl.checked,
       max_cost_usd: stateComposer.maxCostUsd,

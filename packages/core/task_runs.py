@@ -23,6 +23,187 @@ _RUN_ORDER: list[str] = []
 _LOCK = RLock()
 
 
+def _parse_iso(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(str(ts))
+    except Exception:
+        return None
+
+
+def _duration_ms(created_at: str | None, finished_at: str | None) -> int:
+    start = _parse_iso(created_at)
+    end = _parse_iso(finished_at)
+    if start is None or end is None:
+        return 0
+    delta = int((end - start).total_seconds() * 1000)
+    return max(delta, 0)
+
+
+def _risk_summary(levels: list[str]) -> str:
+    if not levels:
+        return "unknown"
+    ordered = {"low": 1, "medium": 2, "high": 3}
+    best = "unknown"
+    score = 0
+    for level in levels:
+        lvl = str(level or "").lower()
+        lvl_score = ordered.get(lvl, 0)
+        if lvl_score > score:
+            score = lvl_score
+            best = lvl
+    return best
+
+
+def _derive_final_status(run_status: str, approvals_requested: int, approvals_applied: int) -> str:
+    normalized = str(run_status or "").lower()
+    if normalized in {"done", "success"}:
+        return "success"
+    if normalized in {"failed", "blocked", "budget_blocked"}:
+        return "failed"
+    if normalized in {"cancelled", "canceled"}:
+        return "cancelled"
+    if approvals_requested > approvals_applied:
+        return "approval_required"
+    return "failed"
+
+
+def _extract_event_data(event: dict) -> dict:
+    data = event.get("data")
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def _build_run_metrics(run: dict) -> dict:
+    events = run.get("events", []) if isinstance(run.get("events"), list) else []
+    created_at = str(run.get("created_at") or "")
+    finished_at = str(run.get("finished_at") or "")
+    run_status = str(run.get("status") or "")
+    model = str(run.get("model") or "")
+    profile = str(run.get("profile") or "custom")
+
+    files_changed: set[str] = set()
+    rollback_ids: set[str] = set()
+    added_lines = 0
+    removed_lines = 0
+    hunks_count = 0
+    approvals_requested = 0
+    approvals_applied = 0
+    patches_generated = 0
+    patches_applied = 0
+    risk_levels: list[str] = []
+    token_input = 0
+    token_output = 0
+    tests_run = 0
+    tests_passed = 0
+    tests_failed = 0
+    tool_usage = {"search": False, "plugins": False, "tests": False, "files": False}
+
+    for event in events:
+        event_type = str(event.get("event_type") or "")
+        data = _extract_event_data(event)
+
+        if event_type == "tool_decision":
+            tool_usage["search"] = bool(data.get("use_search")) or tool_usage["search"]
+            tool_usage["plugins"] = bool(data.get("use_plugins")) or tool_usage["plugins"]
+            tool_usage["tests"] = bool(data.get("use_tests")) or tool_usage["tests"]
+            tool_usage["files"] = bool(data.get("use_files")) or tool_usage["files"]
+
+        if event_type == "patch":
+            generated = data.get("patches")
+            if isinstance(generated, list):
+                patches_generated += len(generated)
+            else:
+                patches_generated += 1
+
+        if event_type == "diff":
+            file_path = str(data.get("file") or "")
+            if file_path:
+                files_changed.add(file_path)
+                patches_applied += 1
+            added_lines += int(data.get("added_lines") or 0)
+            removed_lines += int(data.get("removed_lines") or 0)
+            hunks_count += int(data.get("hunks_count") or 0)
+            risk_lvl = str(data.get("risk_level") or "")
+            if risk_lvl:
+                risk_levels.append(risk_lvl)
+            rollback_id = str(data.get("rollback_id") or "")
+            if rollback_id:
+                rollback_ids.add(rollback_id)
+
+        if event_type == "approval_required":
+            approvals_requested += 1
+            file_path = str(data.get("file") or "")
+            if file_path:
+                files_changed.add(file_path)
+            stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
+            added_lines += int(data.get("added_lines") or stats.get("additions", 0) or 0)
+            removed_lines += int(data.get("removed_lines") or stats.get("deletions", 0) or 0)
+            hunks_count += int(data.get("hunks_count") or 0)
+            risk_lvl = str(data.get("risk_level") or "")
+            if risk_lvl:
+                risk_levels.append(risk_lvl)
+
+        if event_type == "approval_applied":
+            approvals_applied += 1
+            file_path = str(data.get("file") or "")
+            if file_path:
+                files_changed.add(file_path)
+            patches_applied += 1
+            added_lines += int(data.get("added_lines") or 0)
+            removed_lines += int(data.get("removed_lines") or 0)
+            hunks_count += int(data.get("hunks_count") or 0)
+            rollback_id = str(data.get("rollback_id") or "")
+            if rollback_id:
+                rollback_ids.add(rollback_id)
+            risk_lvl = str(data.get("risk_level") or "")
+            if risk_lvl:
+                risk_levels.append(risk_lvl)
+
+        if event_type == "test":
+            if isinstance(data.get("ok"), bool):
+                tests_run += 1
+                if bool(data.get("ok")):
+                    tests_passed += 1
+                else:
+                    tests_failed += 1
+
+        token_input += int(data.get("estimated_input_tokens") or 0)
+        token_output += int(data.get("estimated_output_tokens") or 0)
+
+    final_status = _derive_final_status(run_status, approvals_requested, approvals_applied)
+    return {
+        "run_id": str(run.get("run_id") or ""),
+        "start_time": created_at,
+        "end_time": finished_at,
+        "duration_ms": _duration_ms(created_at, finished_at),
+        "final_status": final_status,
+        "files_changed_count": len(files_changed),
+        "added_lines": added_lines,
+        "removed_lines": removed_lines,
+        "hunks_count": hunks_count,
+        "approvals_requested": approvals_requested,
+        "approvals_applied": approvals_applied,
+        "patches_generated": patches_generated,
+        "patches_applied": patches_applied,
+        "rollback_count": len(rollback_ids),
+        "tool_usage": tool_usage,
+        "token_usage": {
+            "input_tokens": token_input,
+            "output_tokens": token_output,
+            "total_tokens": token_input + token_output,
+        },
+        "model": model,
+        "profile": profile or "custom",
+        "risk_level_summary": _risk_summary(risk_levels),
+        "tests_run": tests_run,
+        "tests_passed": tests_passed,
+        "tests_failed": tests_failed,
+    }
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -67,7 +248,7 @@ def _save_approval_state(run_id: str, source_event_id: str, status: str) -> None
     )
 
 
-def create_run(task: str, model: str | None, access_level: str | None) -> str:
+def create_run(task: str, model: str | None, access_level: str | None, profile: str | None = None) -> str:
     run_id = uuid4().hex
     run = {
         "run_id": run_id,
@@ -78,8 +259,10 @@ def create_run(task: str, model: str | None, access_level: str | None) -> str:
         "summary": "",
         "created_at": _now_iso(),
         "finished_at": None,
+        "profile": _sanitize(profile or "custom"),
         "events": [],
         "approval_states": {},
+        "metrics": {},
     }
     with _LOCK:
         _RUNS[run_id] = run
@@ -95,7 +278,9 @@ def create_run(task: str, model: str | None, access_level: str | None) -> str:
             "summary": run["summary"],
             "created_at": run["created_at"],
             "finished_at": run["finished_at"],
+            "profile": run["profile"],
             "approval_states": run["approval_states"],
+            "metrics": run["metrics"],
             "ts": run["created_at"],
         }
     )
@@ -134,7 +319,17 @@ def finish_run(run_id: str, status: str, summary: str | None = None) -> dict:
         run["status"] = _sanitize(status)
         run["summary"] = _sanitize(summary or "")
         run["finished_at"] = _now_iso()
-    _append_jsonl({"kind": "run_finished", "run_id": run_id, "status": status, "summary": _sanitize(summary or ""), "ts": _now_iso()})
+        run["metrics"] = _build_run_metrics(run)
+    _append_jsonl(
+        {
+            "kind": "run_finished",
+            "run_id": run_id,
+            "status": status,
+            "summary": _sanitize(summary or ""),
+            "metrics": _RUNS.get(run_id, {}).get("metrics", {}),
+            "ts": _now_iso(),
+        }
+    )
     return get_run(run_id)
 
 
@@ -151,6 +346,7 @@ def list_runs() -> list[dict]:
                 "created_at": _RUNS[rid]["created_at"],
                 "finished_at": _RUNS[rid]["finished_at"],
                 "events_count": len(_RUNS[rid]["events"]),
+                "metrics": _RUNS[rid].get("metrics", {}),
             }
             for rid in ids
         ]
@@ -170,6 +366,8 @@ def get_run(run_id: str) -> dict | None:
             "summary": run["summary"],
             "created_at": run["created_at"],
             "finished_at": run["finished_at"],
+            "profile": run.get("profile", "custom"),
+            "metrics": run.get("metrics", {}),
             "events": list(run["events"]),
         }
 
@@ -267,8 +465,10 @@ def _load_runs_unlocked() -> None:
                 "summary": _sanitize(str(record.get("summary", ""))),
                 "created_at": str(record.get("created_at", record.get("ts", _now_iso()))),
                 "finished_at": record.get("finished_at"),
+                "profile": _sanitize(str(record.get("profile", "custom") or "custom")),
                 "events": [],
                 "approval_states": {},
+                "metrics": record.get("metrics", {}) if isinstance(record.get("metrics"), dict) else {},
             }
             approval_states = record.get("approval_states", {})
             if isinstance(approval_states, dict):
@@ -300,6 +500,11 @@ def _load_runs_unlocked() -> None:
             run["status"] = _sanitize(str(record.get("status", run["status"])))
             run["summary"] = _sanitize(str(record.get("summary", run["summary"])))
             run["finished_at"] = str(record.get("ts", run["finished_at"] or _now_iso()))
+            metrics = record.get("metrics")
+            if isinstance(metrics, dict):
+                run["metrics"] = metrics
+            elif not run.get("metrics"):
+                run["metrics"] = _build_run_metrics(run)
         elif kind == "approval_state":
             source_event_id = str(record.get("source_event_id", ""))
             status = str(record.get("status", ""))
@@ -352,7 +557,9 @@ def compact_runs_storage() -> None:
                         "summary": run.get("summary", ""),
                         "created_at": run.get("created_at", _now_iso()),
                         "finished_at": run.get("finished_at"),
+                        "profile": run.get("profile", "custom"),
                         "approval_states": cleaned_states,
+                        "metrics": run.get("metrics", {}) if isinstance(run.get("metrics"), dict) else {},
                         "ts": run.get("created_at", _now_iso()),
                     }
                 )
@@ -377,12 +584,16 @@ def compact_runs_storage() -> None:
                 status = str(run.get("status", "running"))
                 summary = str(run.get("summary", ""))
                 if finished_at or status != "running" or summary:
+                    metrics = run.get("metrics", {})
+                    if not isinstance(metrics, dict) or not metrics:
+                        metrics = _build_run_metrics(run)
                     records.append(
                         {
                             "kind": "run_finished",
                             "run_id": run_id,
                             "status": status,
                             "summary": summary,
+                            "metrics": metrics,
                             "ts": str(finished_at or _now_iso()),
                         }
                     )

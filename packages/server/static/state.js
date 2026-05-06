@@ -3,6 +3,7 @@ export const MODEL_KEY = "codeyz_model";
 export const MODE_KEY = "codeyz_mode";
 export const ACCESS_KEY = "codeyz_access";
 export const PLAN_KEY = "codeyz_plan_mode";
+export const PROFILE_KEY = "codeyz_profile";
 
 export const state = {
   sessionId: null,
@@ -35,6 +36,10 @@ export const els = {
   runsListEl: document.getElementById("runs-list"),
   runEventGroupsEl: document.getElementById("run-event-groups"),
   runReplayContentEl: document.getElementById("run-replay-content"),
+  diffFilesListEl: document.getElementById("diff-files-list"),
+  diffFileMetaEl: document.getElementById("diff-file-meta"),
+  diffHunksEl: document.getElementById("diff-hunks"),
+  runMetricsSummaryEl: document.getElementById("run-metrics-summary"),
   approvalActionsEl: document.getElementById("approval-actions"),
   tdSearchEl: document.getElementById("td-search"),
   tdFilesEl: document.getElementById("td-files"),
@@ -58,11 +63,14 @@ export const els = {
   wfSummaryDecisionEl: document.getElementById("wf-summary-decision"),
 
   modelSelect: document.getElementById("model-select"),
+  profileSelect: document.getElementById("profile-select"),
+  profileStateEl: document.getElementById("profile-state"),
   modeSelect: document.getElementById("mode-select"),
   accessSelect: document.getElementById("access-select"),
   planModeEl: document.getElementById("plan-mode"),
   multiAgentEl: document.getElementById("multi-agent"),
   budgetInputEl: document.getElementById("budget-input"),
+  toggleSettingsBtn: document.getElementById("toggle-settings"),
   contextCostEl: document.getElementById("context-cost"),
   rmPlannerEl: document.getElementById("rm-planner"),
   rmCoderEl: document.getElementById("rm-coder"),
@@ -115,6 +123,7 @@ export function scrollChatToBottom() {
 export function getComposerState() {
   return {
     selectedModel: els.modelSelect.value,
+    selectedProfile: els.profileSelect ? els.profileSelect.value : "custom",
     selectedMode: els.modeSelect.value,
     accessLevel: els.accessSelect.value,
     planMode: els.planModeEl.checked,
