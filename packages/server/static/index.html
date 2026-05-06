@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -30,7 +30,7 @@
       </section>
 
       <section class="panel fixed-panel">
-        <h2>Ausgewählte Datei</h2>
+        <h2>AusgewÃ¤hlte Datei</h2>
         <pre id="selected-file">-</pre>
       </section>
 
@@ -70,18 +70,22 @@
             <div id="approval-actions" class="approval-actions"></div>
             <section class="panel run-metrics-panel">
               <h2>Run Summary</h2>
-              <div id="run-metrics-summary" class="run-metrics-summary">Keine Metriken verfügbar.</div>
+              <div id="run-metrics-summary" class="run-metrics-summary">Keine Metriken verfÃ¼gbar.</div>
+            </section>
+            <section class="panel current-action-panel">
+              <h2>Current Action</h2>
+              <div id="current-action-summary" class="run-metrics-summary">Kein aktiver Run.</div>
             </section>
             <section class="diff-viewer panel">
               <div class="row">
                 <h2>Patch Diff Viewer</h2>
               </div>
               <div id="diff-files-list" class="diff-files-list"></div>
-              <div id="diff-file-meta" class="diff-file-meta">Keine Datei ausgewählt.</div>
+              <div id="diff-file-meta" class="diff-file-meta">Keine Datei ausgewÃ¤hlt.</div>
               <div id="diff-hunks" class="diff-hunks"></div>
             </section>
             <div id="run-event-groups" class="run-event-groups"></div>
-            <pre id="run-replay-content">Kein Run ausgewählt.</pre>
+            <pre id="run-replay-content">Kein Run ausgewÃ¤hlt.</pre>
           </details>
         </div>
       </section>
@@ -110,7 +114,7 @@
         <div id="rollback-list" class="runs-list"></div>
         <details class="run-replay">
           <summary>Rollback Details</summary>
-          <pre id="rollback-detail">Kein Rollback ausgewählt.</pre>
+          <pre id="rollback-detail">Kein Rollback ausgewÃ¤hlt.</pre>
           <button id="rollback-apply" type="button">Rollback anwenden</button>
         </details>
       </section>
@@ -120,7 +124,7 @@
         <input id="token-input" type="password" placeholder="CODEYZ_LOCAL_TOKEN (optional)" />
         <div class="row">
           <button id="save-token" type="button">Speichern</button>
-          <button id="clear-token" type="button">Löschen</button>
+          <button id="clear-token" type="button">LÃ¶schen</button>
         </div>
       </section>
       </div>
@@ -148,7 +152,7 @@
             <span>Workflow</span>
             <span class="collapse-icon">&#9662;</span>
           </button>
-          <span id="workflow-run-state" class="workflow-run-state">Kein Run ausgewählt</span>
+          <span id="workflow-run-state" class="workflow-run-state">Kein Run ausgewÃ¤hlt</span>
         </div>
         <div class="collapsible-body">
           <div id="workflow-phases" class="workflow-phases">
@@ -212,10 +216,10 @@
               <span>Access</span>
               <select id="access-select" class="pill">
                 <option>Nur lesen</option>
-                <option>Dateien ändern</option>
-                <option>Tests ausführen</option>
+                <option>Dateien Ã¤ndern</option>
+                <option>Tests ausfÃ¼hren</option>
                 <option>Autonom</option>
-                <option disabled>Gefährlich deaktiviert</option>
+                <option disabled>GefÃ¤hrlich deaktiviert</option>
               </select>
             </label>
             <label class="settings-item">
@@ -228,6 +232,10 @@
               <span>Planmodus</span>
             </label>
           </div>
+          <section class="panel">
+            <h2>Policy</h2>
+            <div id="policy-summary" class="run-metrics-summary">Policy wird geladen...</div>
+          </section>
 
           <details class="panel role-models-panel">
             <summary>Role Models</summary>
@@ -301,7 +309,7 @@
             <h2>Datei-Vorschau</h2>
             <button id="preview-pin" type="button">Pin</button>
           </div>
-          <pre id="file-preview">Datei auswählen...</pre>
+          <pre id="file-preview">Datei auswÃ¤hlen...</pre>
         </section>
       </div>
     </aside>
@@ -353,4 +361,5 @@
   <script type="module" src="/ui/app.js"></script>
 </body>
 </html>
+
 

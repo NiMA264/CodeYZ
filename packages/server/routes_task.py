@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from packages.core.agent_loop import run_autonomous_task
 from packages.core.loop import run_task
 from packages.core.model_router import set_role_models
+from packages.core.policy import resolve_policy
 from packages.core.patcher import apply_patch, apply_unified_diff
 from packages.core.permissions import can_run_autonomous
 from packages.core.task_runs import (
@@ -14,6 +15,7 @@ from packages.core.task_runs import (
     has_approval_applied,
     list_runs,
     mark_approval_event,
+    set_run_phase,
 )
 from packages.server.errors import raise_api_error
 
@@ -65,6 +67,11 @@ def task_runs() -> dict:
     return {"runs": list_runs()}
 
 
+@router.get("/policy/{profile}")
+def task_policy(profile: str) -> dict:
+    return {"profile": profile, "policy": resolve_policy(profile)}
+
+
 @router.get("/runs/{run_id}")
 def task_run_by_id(run_id: str) -> dict:
     run = get_run(run_id)
@@ -104,6 +111,7 @@ def approve_patch(run_id: str, event_id: str) -> dict:
             "Reload timeline and wait for the current approval result.",
         )
 
+    set_run_phase(run_id, "approval_required")
     data = event.get("data") or {}
     patch = data.get("patch") if isinstance(data, dict) else None
     if not isinstance(patch, dict):
@@ -116,12 +124,14 @@ def approve_patch(run_id: str, event_id: str) -> dict:
         raise_api_error(400, "approval_patch_invalid", "Stored patch payload is invalid.", "Retry task to regenerate approval event.")
 
     try:
+        set_run_phase(run_id, "applying")
         if unified_diff:
             out = apply_unified_diff(file_path, unified_diff, access_level="Autonom", approved=True)
         else:
             out = apply_patch(file_path, str(new_content), access_level="Autonom", approved=True)
     except Exception as exc:
         mark_approval_event(run_id, event_id, "failed")
+        set_run_phase(run_id, "failed")
         add_event(
             run_id,
             "error",

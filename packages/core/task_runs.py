@@ -21,6 +21,19 @@ _SECRET_PATTERNS = [
 _RUNS: dict[str, dict] = {}
 _RUN_ORDER: list[str] = []
 _LOCK = RLock()
+RUN_PHASES = {
+    "created",
+    "planning",
+    "analyzing",
+    "tool_selection",
+    "patching",
+    "testing",
+    "approval_required",
+    "applying",
+    "completed",
+    "failed",
+    "cancelled",
+}
 
 
 def _parse_iso(ts: str | None) -> datetime | None:
@@ -76,10 +89,61 @@ def _extract_event_data(event: dict) -> dict:
     return {}
 
 
-def _build_run_metrics(run: dict) -> dict:
+def _derive_phase_from_events(run: dict) -> str:
+    events = run.get("events", []) if isinstance(run.get("events"), list) else []
+    status = str(run.get("status") or "").lower()
+    if status in {"done", "success"}:
+        return "completed"
+    if status in {"failed", "blocked", "budget_blocked"}:
+        return "failed"
+    if status in {"cancelled", "canceled"}:
+        return "cancelled"
+
+    approval_required_ids: set[str] = set()
+    approval_applied_ids: set[str] = set()
+    for event in events:
+        event_type = str(event.get("event_type") or "")
+        if event_type == "approval_required":
+            approval_required_ids.add(str(event.get("event_id") or ""))
+        elif event_type == "approval_applied":
+            data = _extract_event_data(event)
+            source_event_id = str(data.get("source_event_id") or "")
+            if source_event_id:
+                approval_applied_ids.add(source_event_id)
+    if any(event_id and event_id not in approval_applied_ids for event_id in approval_required_ids):
+        return "approval_required"
+
+    event_to_phase = {
+        "tool_decision": "tool_selection",
+        "analyze": "analyzing",
+        "plan": "planning",
+        "patch": "patching",
+        "diff": "patching",
+        "approval_applied": "applying",
+        "test": "testing",
+        "build": "testing",
+        "result": "completed",
+        "error": "failed",
+    }
+    for event in reversed(events):
+        mapped = event_to_phase.get(str(event.get("event_type") or ""))
+        if mapped:
+            return mapped
+    return "created"
+
+
+def _resolve_phase(run: dict) -> str:
+    phase = str(run.get("phase") or "")
+    if phase in RUN_PHASES and not (phase == "created" and isinstance(run.get("events"), list) and run.get("events")):
+        return phase
+    return _derive_phase_from_events(run)
+
+
+def _build_run_metrics(run: dict, live: bool = False) -> dict:
     events = run.get("events", []) if isinstance(run.get("events"), list) else []
     created_at = str(run.get("created_at") or "")
     finished_at = str(run.get("finished_at") or "")
+    phase = _resolve_phase(run)
     run_status = str(run.get("status") or "")
     model = str(run.get("model") or "")
     profile = str(run.get("profile") or "custom")
@@ -99,6 +163,10 @@ def _build_run_metrics(run: dict) -> dict:
     tests_run = 0
     tests_passed = 0
     tests_failed = 0
+    policy_violations_count = 0
+    policy_warnings_count = 0
+    blocked_actions_count = 0
+    policy_trigger_reasons: list[str] = []
     tool_usage = {"search": False, "plugins": False, "tests": False, "files": False}
 
     for event in events:
@@ -169,17 +237,40 @@ def _build_run_metrics(run: dict) -> dict:
                     tests_passed += 1
                 else:
                     tests_failed += 1
+        if event_type == "policy_warning":
+            policy_warnings_count += 1
+            reason = str(data.get("reason") or "")
+            if reason:
+                policy_trigger_reasons.append(reason)
+        if event_type == "policy_block":
+            policy_violations_count += 1
+            blocked_actions_count += 1
+            reason = str(data.get("reason") or "")
+            if reason:
+                policy_trigger_reasons.append(reason)
+        if event_type == "policy_approval_required":
+            policy_violations_count += 1
+            reason = str(data.get("reason") or "")
+            if reason:
+                policy_trigger_reasons.append(reason)
 
         token_input += int(data.get("estimated_input_tokens") or 0)
         token_output += int(data.get("estimated_output_tokens") or 0)
 
     final_status = _derive_final_status(run_status, approvals_requested, approvals_applied)
+    if live and not finished_at and run_status == "running":
+        if phase == "approval_required":
+            final_status = "approval_required"
+        else:
+            final_status = "running"
+    end_time = finished_at or (_now_iso() if live else "")
     return {
         "run_id": str(run.get("run_id") or ""),
         "start_time": created_at,
-        "end_time": finished_at,
-        "duration_ms": _duration_ms(created_at, finished_at),
+        "end_time": end_time,
+        "duration_ms": _duration_ms(created_at, end_time),
         "final_status": final_status,
+        "current_phase": phase,
         "files_changed_count": len(files_changed),
         "added_lines": added_lines,
         "removed_lines": removed_lines,
@@ -201,6 +292,10 @@ def _build_run_metrics(run: dict) -> dict:
         "tests_run": tests_run,
         "tests_passed": tests_passed,
         "tests_failed": tests_failed,
+        "policy_violations_count": policy_violations_count,
+        "policy_warnings_count": policy_warnings_count,
+        "blocked_actions_count": blocked_actions_count,
+        "policy_trigger_reasons": sorted(set(policy_trigger_reasons))[:20],
     }
 
 
@@ -248,7 +343,13 @@ def _save_approval_state(run_id: str, source_event_id: str, status: str) -> None
     )
 
 
-def create_run(task: str, model: str | None, access_level: str | None, profile: str | None = None) -> str:
+def create_run(
+    task: str,
+    model: str | None,
+    access_level: str | None,
+    profile: str | None = None,
+    policy: dict | None = None,
+) -> str:
     run_id = uuid4().hex
     run = {
         "run_id": run_id,
@@ -260,6 +361,8 @@ def create_run(task: str, model: str | None, access_level: str | None, profile: 
         "created_at": _now_iso(),
         "finished_at": None,
         "profile": _sanitize(profile or "custom"),
+        "policy": _sanitize(policy or {}),
+        "phase": "created",
         "events": [],
         "approval_states": {},
         "metrics": {},
@@ -279,6 +382,8 @@ def create_run(task: str, model: str | None, access_level: str | None, profile: 
             "created_at": run["created_at"],
             "finished_at": run["finished_at"],
             "profile": run["profile"],
+            "policy": run["policy"],
+            "phase": run["phase"],
             "approval_states": run["approval_states"],
             "metrics": run["metrics"],
             "ts": run["created_at"],
@@ -319,6 +424,12 @@ def finish_run(run_id: str, status: str, summary: str | None = None) -> dict:
         run["status"] = _sanitize(status)
         run["summary"] = _sanitize(summary or "")
         run["finished_at"] = _now_iso()
+        if run["status"] in {"done", "success"}:
+            run["phase"] = "completed"
+        elif run["status"] in {"failed", "blocked", "budget_blocked"}:
+            run["phase"] = "failed"
+        elif run["status"] in {"cancelled", "canceled"}:
+            run["phase"] = "cancelled"
         run["metrics"] = _build_run_metrics(run)
     _append_jsonl(
         {
@@ -326,6 +437,7 @@ def finish_run(run_id: str, status: str, summary: str | None = None) -> dict:
             "run_id": run_id,
             "status": status,
             "summary": _sanitize(summary or ""),
+            "phase": _RUNS.get(run_id, {}).get("phase", ""),
             "metrics": _RUNS.get(run_id, {}).get("metrics", {}),
             "ts": _now_iso(),
         }
@@ -336,6 +448,14 @@ def finish_run(run_id: str, status: str, summary: str | None = None) -> dict:
 def list_runs() -> list[dict]:
     with _LOCK:
         ids = list(reversed(_RUN_ORDER))
+        def _metrics_for(run: dict) -> dict:
+            if str(run.get("status", "")) == "running":
+                return _build_run_metrics(run, live=True)
+            metrics = run.get("metrics", {})
+            if isinstance(metrics, dict) and metrics:
+                return metrics
+            return _build_run_metrics(run)
+
         return [
             {
                 "run_id": _RUNS[rid]["run_id"],
@@ -346,7 +466,9 @@ def list_runs() -> list[dict]:
                 "created_at": _RUNS[rid]["created_at"],
                 "finished_at": _RUNS[rid]["finished_at"],
                 "events_count": len(_RUNS[rid]["events"]),
-                "metrics": _RUNS[rid].get("metrics", {}),
+                "policy": _RUNS[rid].get("policy", {}),
+                "phase": _resolve_phase(_RUNS[rid]),
+                "metrics": _metrics_for(_RUNS[rid]),
             }
             for rid in ids
         ]
@@ -367,9 +489,24 @@ def get_run(run_id: str) -> dict | None:
             "created_at": run["created_at"],
             "finished_at": run["finished_at"],
             "profile": run.get("profile", "custom"),
-            "metrics": run.get("metrics", {}),
+            "policy": run.get("policy", {}),
+            "phase": _resolve_phase(run),
+            "metrics": _build_run_metrics(run, live=(str(run.get("status", "")) == "running")),
             "events": list(run["events"]),
         }
+
+
+def set_run_phase(run_id: str, phase: str) -> dict | None:
+    safe_phase = str(phase or "").strip().lower()
+    if safe_phase not in RUN_PHASES:
+        safe_phase = "created"
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            return None
+        run["phase"] = safe_phase
+    _append_jsonl({"kind": "run_phase", "run_id": run_id, "phase": safe_phase, "ts": _now_iso()})
+    return get_run(run_id)
 
 
 def get_event(run_id: str, event_id: str) -> dict | None:
@@ -466,6 +603,8 @@ def _load_runs_unlocked() -> None:
                 "created_at": str(record.get("created_at", record.get("ts", _now_iso()))),
                 "finished_at": record.get("finished_at"),
                 "profile": _sanitize(str(record.get("profile", "custom") or "custom")),
+                "policy": _sanitize(record.get("policy", {}) if isinstance(record.get("policy"), dict) else {}),
+                "phase": str(record.get("phase", "created") or "created"),
                 "events": [],
                 "approval_states": {},
                 "metrics": record.get("metrics", {}) if isinstance(record.get("metrics"), dict) else {},
@@ -505,6 +644,15 @@ def _load_runs_unlocked() -> None:
                 run["metrics"] = metrics
             elif not run.get("metrics"):
                 run["metrics"] = _build_run_metrics(run)
+            phase = str(record.get("phase", "") or "")
+            if phase in RUN_PHASES:
+                run["phase"] = phase
+            else:
+                run["phase"] = _derive_phase_from_events(run)
+        elif kind == "run_phase":
+            phase = str(record.get("phase", "") or "")
+            if phase in RUN_PHASES:
+                run["phase"] = phase
         elif kind == "approval_state":
             source_event_id = str(record.get("source_event_id", ""))
             status = str(record.get("status", ""))
@@ -558,6 +706,8 @@ def compact_runs_storage() -> None:
                         "created_at": run.get("created_at", _now_iso()),
                         "finished_at": run.get("finished_at"),
                         "profile": run.get("profile", "custom"),
+                        "policy": run.get("policy", {}) if isinstance(run.get("policy"), dict) else {},
+                        "phase": _resolve_phase(run),
                         "approval_states": cleaned_states,
                         "metrics": run.get("metrics", {}) if isinstance(run.get("metrics"), dict) else {},
                         "ts": run.get("created_at", _now_iso()),
@@ -593,6 +743,7 @@ def compact_runs_storage() -> None:
                             "run_id": run_id,
                             "status": status,
                             "summary": summary,
+                            "phase": _resolve_phase(run),
                             "metrics": metrics,
                             "ts": str(finished_at or _now_iso()),
                         }

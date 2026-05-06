@@ -82,6 +82,22 @@ def test_task_runs_persist_metrics_in_run_finished_record(monkeypatch, tmp_path:
     assert finished[-1]["metrics"]["files_changed_count"] >= 1
 
 
+def test_task_runs_persist_phase_records(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CODEYZ_RUNTIME_ROOT", str(tmp_path))
+    from packages.core import task_runs as task_runs_module
+
+    runs = importlib.reload(task_runs_module)
+    run_id = runs.create_run("phase persist", "gpt-5.4-mini", "Autonom")
+    runs.set_run_phase(run_id, "planning")
+    runs.set_run_phase(run_id, "patching")
+
+    runs_reloaded = importlib.reload(task_runs_module)
+    runs_reloaded.initialize_task_runs_storage()
+    run = runs_reloaded.get_run(run_id)
+    assert run is not None
+    assert run["phase"] == "patching"
+
+
 def test_compact_runs_storage_reduces_redundant_approval_state_records(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CODEYZ_RUNTIME_ROOT", str(tmp_path))
     from packages.core import task_runs as task_runs_module

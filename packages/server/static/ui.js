@@ -1359,6 +1359,42 @@ function updateProfileUi(profileKey) {
   }
 }
 
+async function refreshPolicySummary(profileKey) {
+  if (!els.policySummaryEl) return;
+  const key = PROFILE_DEFS[profileKey] ? profileKey : "custom";
+  try {
+    const data = await apiGet(`/task/policy/${encodeURIComponent(key)}`);
+    const policy = data && typeof data.policy === "object" ? data.policy : {};
+    const rows = [
+      ["Profile", PROFILE_DEFS[key]?.label || "Custom"],
+      ["Max files", policy.max_files_changed ?? "-"],
+      ["Max +lines", policy.max_added_lines ?? "-"],
+      ["Max -lines", policy.max_removed_lines ?? "-"],
+      ["Shell", policy.allow_shell ? "enabled" : "disabled"],
+      ["Delete", policy.allow_delete ? "enabled" : "disabled"],
+      ["Rename", policy.allow_rename ? "enabled" : "disabled"],
+      ["Approval", policy.require_approval ? "required" : "conditional"],
+      ["Tests", policy.require_tests ? "required" : "optional"],
+      ["Multi-agent", policy.allow_multi_agent ? "enabled" : "disabled"],
+      ["Risk", policy.max_risk_level || "medium"],
+      ["Runtime (min)", policy.max_runtime_minutes ?? "-"],
+    ];
+    els.policySummaryEl.innerHTML = "";
+    for (const [k, v] of rows) {
+      const keyEl = document.createElement("span");
+      keyEl.className = "run-metric-key";
+      keyEl.textContent = `${k}:`;
+      const valueEl = document.createElement("span");
+      valueEl.className = "run-metric-value";
+      valueEl.textContent = String(v);
+      els.policySummaryEl.appendChild(keyEl);
+      els.policySummaryEl.appendChild(valueEl);
+    }
+  } catch {
+    els.policySummaryEl.textContent = "Policy nicht verfügbar.";
+  }
+}
+
 function syncProfileStateFromCurrentSettings() {
   if (suspendProfileSync) return;
   const snapshot = getCurrentSettingsSnapshot();
@@ -1366,11 +1402,13 @@ function syncProfileStateFromCurrentSettings() {
     if (isSameProfileSettings(profile.settings, snapshot)) {
       setStored(PROFILE_KEY, key);
       updateProfileUi(key);
+      refreshPolicySummary(key);
       return;
     }
   }
   setStored(PROFILE_KEY, "custom");
   updateProfileUi("custom");
+  refreshPolicySummary("custom");
 }
 
 function applyProfile(profileKey) {
@@ -1395,6 +1433,7 @@ function applyProfile(profileKey) {
     setStored(PLAN_KEY, els.planModeEl.checked ? "1" : "0");
     setStored(PROFILE_KEY, profileKey);
     updateProfileUi(profileKey);
+    refreshPolicySummary(profileKey);
   } finally {
     suspendProfileSync = false;
   }
@@ -1521,6 +1560,7 @@ function bindEvents() {
       if (key === "custom") {
         setStored(PROFILE_KEY, "custom");
         updateProfileUi("custom");
+        refreshPolicySummary("custom");
         return;
       }
       applyProfile(key);
@@ -1687,6 +1727,7 @@ export function initUi() {
     updateProfileUi("custom");
     syncProfileStateFromCurrentSettings();
   }
+  refreshPolicySummary(getStored(PROFILE_KEY, "custom"));
   addMessage("assistant", "CodeYZ UI bereit.");
   if (prefs.session?.lastRunId) showToast("Session restored");
   if (!prefs.session?.lastRunId) scrollChatToBottom();

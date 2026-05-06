@@ -10,6 +10,20 @@ const PHASE_EVENT_MAP = {
   tests: ["test"],
   diff: ["diff"],
 };
+const PHASE_LABELS = {
+  created: "Created",
+  planning: "Planning",
+  analyzing: "Analyzing",
+  tool_selection: "Selecting tools",
+  patching: "Generating patch",
+  testing: "Running tests",
+  approval_required: "Waiting for approval",
+  applying: "Applying patch",
+  completed: "Completed",
+  failed: "Failed",
+  cancelled: "Cancelled",
+  unknown: "Unknown",
+};
 let lastRenderedRunIds = "";
 const RUN_ROW_HEIGHT = 30;
 const RUN_BUFFER = 6;
@@ -29,6 +43,9 @@ const GROUP_LABELS = {
   analyze: "Task Events",
   build: "Build Events",
   tool_decision: "Tool Decisions",
+  policy_warning: "Policy Warnings",
+  policy_block: "Policy Blocks",
+  policy_approval_required: "Policy Approvals",
   error: "Errors",
 };
 
@@ -291,6 +308,49 @@ function formatDuration(durationMs) {
   return `${min}m ${sec}s`;
 }
 
+function normalizePhase(rawPhase) {
+  const phase = String(rawPhase || "").trim().toLowerCase();
+  return PHASE_LABELS[phase] ? phase : "unknown";
+}
+
+function derivePhase(detail) {
+  const explicit = normalizePhase(detail?.phase);
+  if (explicit !== "unknown") return explicit;
+  const metricsPhase = normalizePhase(detail?.metrics?.current_phase);
+  if (metricsPhase !== "unknown") return metricsPhase;
+  const status = String(detail?.status || "").toLowerCase();
+  if (status === "done") return "completed";
+  if (status === "failed" || status === "blocked" || status === "budget_blocked") return "failed";
+  if (status === "cancelled" || status === "canceled") return "cancelled";
+  return "unknown";
+}
+
+function renderCurrentAction(detail) {
+  if (!els.currentActionSummaryEl) return;
+  const metrics = detail && typeof detail.metrics === "object" ? detail.metrics : {};
+  const phase = derivePhase(detail);
+  const action = PHASE_LABELS[phase] || PHASE_LABELS.unknown;
+  const rows = [
+    ["Action", action],
+    ["Phase", phase],
+    ["Elapsed", formatDuration(metrics.duration_ms)],
+    ["Files changed", metrics.files_changed_count ?? "0"],
+    ["Risk", metrics.risk_level_summary || "unknown"],
+    ["Status", metrics.final_status || detail?.status || "unknown"],
+  ];
+  els.currentActionSummaryEl.innerHTML = "";
+  for (const [key, value] of rows) {
+    const k = document.createElement("span");
+    k.className = "run-metric-key";
+    k.textContent = `${key}:`;
+    const v = document.createElement("span");
+    v.className = "run-metric-value";
+    v.textContent = String(value ?? "-");
+    els.currentActionSummaryEl.appendChild(k);
+    els.currentActionSummaryEl.appendChild(v);
+  }
+}
+
 function renderRunMetrics(detail) {
   if (!els.runMetricsSummaryEl) return;
   const metrics = detail && typeof detail.metrics === "object" ? detail.metrics : {};
@@ -303,6 +363,9 @@ function renderRunMetrics(detail) {
     ["Risk", metrics.risk_level_summary || "unknown"],
     ["Approvals", `${metrics.approvals_applied ?? 0}/${metrics.approvals_requested ?? 0}`],
     ["Patches applied", metrics.patches_applied ?? "0"],
+    ["Policy warnings", metrics.policy_warnings_count ?? "0"],
+    ["Policy violations", metrics.policy_violations_count ?? "0"],
+    ["Blocked actions", metrics.blocked_actions_count ?? "0"],
     ["Status", metrics.final_status || detail?.status || "unknown"],
     ["Profile", metrics.profile || detail?.profile || "custom"],
   ];
@@ -324,6 +387,7 @@ function renderReplay(detail) {
   lines.push(`Run: ${detail.run_id}`);
   lines.push(`Task: ${detail.task}`);
   lines.push(`Status: ${detail.status}`);
+  lines.push(`Phase: ${derivePhase(detail)}`);
   lines.push(`Summary: ${detail.summary || "-"}`);
   if (detail.estimated_total_cost_usd !== undefined) {
     lines.push(`Estimated total cost: $${detail.estimated_total_cost_usd}`);
@@ -334,6 +398,7 @@ function renderReplay(detail) {
   }
   els.runReplayContentEl.textContent = lines.join("\n");
   renderRunMetrics(detail);
+  renderCurrentAction(detail);
   renderDiffViewer(detail.events || []);
   renderEventGroups(detail.events || []);
 }

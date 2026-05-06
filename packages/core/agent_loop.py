@@ -6,6 +6,7 @@ from openai import OpenAI
 
 from packages.core.agent_pipeline import run_multi_agent_task
 from packages.core.executor import run_build, run_tests, summarize_errors
+from packages.core.policy import resolve_policy, risk_exceeds, runtime_exceeded
 from packages.core.patcher import (
     PatchApprovalRequired,
     apply_ast_patch,
@@ -14,7 +15,7 @@ from packages.core.patcher import (
     build_diff_metadata,
 )
 from packages.core.permissions import assert_can_run_autonomous
-from packages.core.task_runs import add_event, create_run, finish_run, get_run
+from packages.core.task_runs import add_event, create_run, finish_run, get_run, set_run_phase
 from packages.tools.files import list_files, read_file
 
 MODEL = os.getenv("CODEYZ_MODEL", "gpt-5.4-mini")
@@ -71,9 +72,9 @@ Project snapshot:
 Return JSON with keys:
 - plan: short string
 - patches: array of objects with one of:
-  - {"file_path": "...", "ast_patch": {"operation": "replace_function|add_function", "target": "function_name", "code": "def ..."}}
-  - {"file_path": "...", "unified_diff": "..."}
-  - {"file_path": "...", "new_content": "..."}
+  - {{"file_path": "...", "ast_patch": {{"operation": "replace_function|add_function", "target": "function_name", "code": "def ..."}}}}
+  - {{"file_path": "...", "unified_diff": "..."}}
+  - {{"file_path": "...", "new_content": "..."}}
   - prefer ast_patch for simple Python function edits
   - fallback to unified_diff or new_content only if needed
 Limit patches to at most 3 files.
@@ -97,16 +98,21 @@ def run_autonomous_task(
     max_cost_usd: float | None = None,
     profile: str | None = None,
 ) -> dict[str, Any]:
+    effective_policy = resolve_policy(profile)
     if use_multi_agent:
+        if not bool(effective_policy.get("allow_multi_agent", False)):
+            return {"ok": False, "run_id": "", "error": "Policy blocks multi-agent mode", "events": []}
         return run_multi_agent_task(task=task, access_level=access_level, model=model, max_cost_usd=max_cost_usd, profile=profile)
 
-    run_id = create_run(task=task, model=model, access_level=access_level, profile=profile)
-    add_event(run_id, "analyze", "Autonomous task started", {"task": task})
+    run_id = create_run(task=task, model=model, access_level=access_level, profile=profile, policy=effective_policy)
+    set_run_phase(run_id, "analyzing")
+    add_event(run_id, "analyze", "Autonomous task started", {"task": task, "policy": effective_policy})
 
     try:
         assert_can_run_autonomous(access_level)
     except PermissionError as exc:
         add_event(run_id, "error", "Access denied", {"error": str(exc)})
+        set_run_phase(run_id, "failed")
         finish_run(run_id, "blocked", str(exc))
         run = get_run(run_id)
         return {"ok": False, "run_id": run_id, "error": str(exc), "events": run["events"] if run else []}
@@ -115,7 +121,22 @@ def run_autonomous_task(
     last_error = ""
 
     for iteration in range(1, 6):
+        run_state = get_run(run_id) or {}
+        if runtime_exceeded(run_state.get("created_at"), int(effective_policy.get("max_runtime_minutes", 10))):
+            add_event(
+                run_id,
+                "policy_block",
+                "Runtime limit exceeded",
+                {"reason": "max_runtime_minutes", "policy": effective_policy},
+                agent_role="reviewer",
+            )
+            set_run_phase(run_id, "failed")
+            finish_run(run_id, "failed", "Policy runtime limit exceeded")
+            run = get_run(run_id)
+            return {"ok": False, "run_id": run_id, "error": "Policy runtime limit exceeded", "events": run["events"] if run else []}
+
         step: dict[str, Any] = {"iteration": iteration}
+        set_run_phase(run_id, "planning")
         add_event(run_id, "plan", f"Iteration {iteration}: planning")
 
         plan_payload = _plan_and_patch(task, last_error, model=model)
@@ -124,6 +145,7 @@ def run_autonomous_task(
         add_event(run_id, "plan", f"Iteration {iteration}: plan ready", {"plan": plan_text})
 
         patch_results: list[dict[str, str]] = []
+        set_run_phase(run_id, "patching")
         for patch in plan_payload.get("patches", [])[:3]:
             file_path = str(patch.get("file_path", "")).strip()
             ast_patch = patch.get("ast_patch")
@@ -132,6 +154,7 @@ def run_autonomous_task(
             if not file_path:
                 continue
             try:
+                approved = bool(not effective_policy.get("require_approval", False))
                 if isinstance(ast_patch, dict):
                     patch_result = apply_ast_patch(
                         file_path,
@@ -139,11 +162,27 @@ def run_autonomous_task(
                         target=str(ast_patch.get("target", "")),
                         code=str(ast_patch.get("code", "")),
                         access_level=access_level,
+                        approved=approved,
                     )
                 elif unified_diff:
-                    patch_result = apply_unified_diff(file_path, unified_diff, access_level=access_level)
+                    patch_result = apply_unified_diff(file_path, unified_diff, access_level=access_level, approved=approved)
                 else:
-                    patch_result = apply_patch(file_path, new_content, access_level=access_level)
+                    patch_result = apply_patch(file_path, new_content, access_level=access_level, approved=approved)
+
+                if risk_exceeds(str(effective_policy.get("max_risk_level", "medium")), str(patch_result.get("risk_level", "low"))):
+                    set_run_phase(run_id, "approval_required")
+                    add_event(
+                        run_id,
+                        "policy_approval_required",
+                        "Patch risk exceeds policy limit",
+                        {
+                            "reason": "max_risk_level",
+                            "policy_max_risk_level": effective_policy.get("max_risk_level", "medium"),
+                            "patch_risk_level": patch_result.get("risk_level", "unknown"),
+                            "file": file_path,
+                        },
+                    )
+
                 patch_results.append(patch_result)
                 add_event(run_id, "patch", f"Iteration {iteration}: patched {file_path}", {"file": file_path, "rollback_id": patch_result.get("rollback_id")})
                 add_event(
@@ -163,6 +202,37 @@ def run_autonomous_task(
                         "files_changed_count": patch_result.get("files_changed_count", 1),
                     },
                 )
+                current = get_run(run_id) or {}
+                live_metrics = current.get("metrics", {}) if isinstance(current.get("metrics"), dict) else {}
+                max_files = int(effective_policy.get("max_files_changed", 5))
+                max_add = int(effective_policy.get("max_added_lines", 240))
+                max_remove = int(effective_policy.get("max_removed_lines", 120))
+                if patch_result.get("file_status") == "deleted" and not bool(effective_policy.get("allow_delete", False)):
+                    add_event(run_id, "policy_block", "Delete blocked by policy", {"reason": "allow_delete", "file": file_path, "policy": effective_policy})
+                    set_run_phase(run_id, "failed")
+                    finish_run(run_id, "failed", "Policy blocked delete")
+                    run = get_run(run_id)
+                    return {"ok": False, "run_id": run_id, "error": "Policy blocked delete", "events": run["events"] if run else []}
+                if int(live_metrics.get("files_changed_count", 0)) > max_files:
+                    add_event(run_id, "policy_block", "Too many files changed", {"reason": "max_files_changed", "limit": max_files, "policy": effective_policy})
+                    set_run_phase(run_id, "failed")
+                    finish_run(run_id, "failed", "Policy max_files_changed exceeded")
+                    run = get_run(run_id)
+                    return {"ok": False, "run_id": run_id, "error": "Policy max_files_changed exceeded", "events": run["events"] if run else []}
+                if int(live_metrics.get("added_lines", 0)) > max_add or int(live_metrics.get("removed_lines", 0)) > max_remove:
+                    add_event(
+                        run_id,
+                        "policy_approval_required",
+                        "Line-change limit exceeded",
+                        {
+                            "reason": "line_limits",
+                            "max_added_lines": max_add,
+                            "max_removed_lines": max_remove,
+                            "added_lines": live_metrics.get("added_lines", 0),
+                            "removed_lines": live_metrics.get("removed_lines", 0),
+                            "policy": effective_policy,
+                        },
+                    )
             except PatchApprovalRequired as exc:
                 patch_payload = {"file_path": file_path}
                 if unified_diff:
@@ -186,9 +256,13 @@ def run_autonomous_task(
                     "stats": exc.stats,
                     "patch_preview": preview[:1000],
                     "patch": patch_payload,
+                    "policy_reason": "require_approval",
+                    "policy": effective_policy,
                     **meta,
                 }
                 patch_results.append({"file": file_path, "diff": "", "archive": "", "error": str(exc)})
+                set_run_phase(run_id, "approval_required")
+                add_event(run_id, "policy_approval_required", "Policy requires approval", {"reason": "require_approval", "file": file_path})
                 add_event(run_id, "approval_required", "High-risk patch requires approval", approval_payload)
             except Exception as exc:
                 error_result = {"file": file_path, "diff": "", "archive": "", "error": str(exc)}
@@ -197,8 +271,15 @@ def run_autonomous_task(
 
         step["patches"] = patch_results
 
-        build_result = run_build(access_level=access_level)
-        test_result = run_tests(access_level=access_level)
+        set_run_phase(run_id, "testing")
+        if bool(effective_policy.get("allow_shell", False)):
+            build_result = run_build(access_level=access_level)
+            test_result = run_tests(access_level=access_level)
+        else:
+            add_event(run_id, "policy_warning", "Shell execution disabled by policy", {"reason": "allow_shell", "policy": effective_policy}, agent_role="tester")
+            build_result = {"ok": False, "output": "Build disabled by policy (allow_shell=false)"}
+            test_result = {"ok": False, "output": "Tests disabled by policy (allow_shell=false)"}
+
         step["build"] = build_result
         step["tests"] = test_result
         add_event(run_id, "build", f"Iteration {iteration}: build", build_result)
@@ -208,9 +289,19 @@ def run_autonomous_task(
             step["status"] = "done"
             logs.append(step)
             add_event(run_id, "result", "Autonomous task finished", {"status": "done", "iteration": iteration})
+            set_run_phase(run_id, "completed")
             finish_run(run_id, "done", "Build and tests passed")
             run = get_run(run_id)
             return {"ok": True, "run_id": run_id, "iterations": logs, "events": run["events"] if run else []}
+
+        if bool(effective_policy.get("require_tests", False)) and not bool(test_result.get("ok")):
+            add_event(
+                run_id,
+                "policy_approval_required",
+                "Policy requires passing tests before completion",
+                {"reason": "require_tests", "policy": effective_policy},
+                agent_role="tester",
+            )
 
         step["status"] = "needs_fix"
         last_error = summarize_errors(str(build_result.get("output", "")), str(test_result.get("output", "")))
@@ -219,6 +310,7 @@ def run_autonomous_task(
         add_event(run_id, "fix", f"Iteration {iteration}: fix needed", {"error_summary": last_error})
 
     add_event(run_id, "result", "Autonomous task reached iteration limit", {"status": "failed"})
+    set_run_phase(run_id, "failed")
     finish_run(run_id, "failed", "Max iterations reached")
     run = get_run(run_id)
     return {
@@ -228,4 +320,3 @@ def run_autonomous_task(
         "events": run["events"] if run else [],
         "error": "Max iterations reached",
     }
-

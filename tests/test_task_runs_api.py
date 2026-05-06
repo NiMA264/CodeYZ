@@ -1,6 +1,6 @@
 ﻿from fastapi.testclient import TestClient
 
-from packages.core.task_runs import add_event, claim_approval_event, create_run, finish_run, mark_approval_event
+from packages.core.task_runs import add_event, claim_approval_event, create_run, finish_run, mark_approval_event, set_run_phase
 from packages.server.app import app
 
 
@@ -12,6 +12,17 @@ def test_task_runs_endpoint_returns_data(monkeypatch) -> None:
     res = client.get("/task/runs", headers={"x-api-key": "token123"})
     assert res.status_code == 200
     assert any(item["run_id"] == run_id for item in res.json()["runs"])
+
+
+def test_task_policy_endpoint_returns_effective_policy(monkeypatch) -> None:
+    monkeypatch.setenv("CODEYZ_LOCAL_TOKEN", "token123")
+    client = TestClient(app)
+    res = client.get("/task/policy/review", headers={"x-api-key": "token123"})
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["profile"] == "review"
+    assert isinstance(payload.get("policy"), dict)
+    assert "max_files_changed" in payload["policy"]
 
 
 def test_task_run_detail_exposes_metrics(monkeypatch) -> None:
@@ -27,6 +38,22 @@ def test_task_run_detail_exposes_metrics(monkeypatch) -> None:
     assert payload["profile"] == "safe_mode"
     assert isinstance(payload.get("metrics"), dict)
     assert payload["metrics"]["files_changed_count"] >= 1
+
+
+def test_task_run_detail_exposes_phase_for_running_run(monkeypatch) -> None:
+    monkeypatch.setenv("CODEYZ_LOCAL_TOKEN", "token123")
+    run_id = create_run("Task phase api", "gpt-5.4-mini", "Autonom", profile="review")
+    set_run_phase(run_id, "planning")
+    add_event(run_id, "plan", "ready", {"estimated_input_tokens": 12})
+
+    client = TestClient(app)
+    res = client.get(f"/task/runs/{run_id}", headers={"x-api-key": "token123"})
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["phase"] == "planning"
+    assert payload["metrics"]["current_phase"] == "planning"
+    assert payload["metrics"]["duration_ms"] >= 0
+    assert isinstance(payload.get("policy"), dict)
 
 
 def test_task_run_detail_preserves_approval_required_event(monkeypatch) -> None:

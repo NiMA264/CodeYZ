@@ -4,6 +4,7 @@ from packages.core.agents import coder, fixer, planner, reviewer, tester
 from packages.core.costs import BudgetCheck
 from packages.core.executor import run_build, run_tests, summarize_errors
 from packages.core.indexer import search_files
+from packages.core.policy import resolve_policy, runtime_exceeded
 from packages.core.patcher import (
     PatchApprovalRequired,
     apply_ast_patch,
@@ -18,7 +19,7 @@ from packages.core.permissions import (
     can_run_tests,
     can_write_files,
 )
-from packages.core.task_runs import add_event, create_run, finish_run, get_run
+from packages.core.task_runs import add_event, create_run, finish_run, get_run, set_run_phase
 from packages.core.tool_selector import decide_tools
 from packages.tools.files import list_files
 from packages.tools.git import git_diff
@@ -143,7 +144,21 @@ def run_multi_agent_task(
     max_cost_usd: float | None = None,
     profile: str | None = None,
 ) -> dict[str, Any]:
-    run_id = create_run(task=task, model=model, access_level=access_level, profile=profile)
+    effective_policy = resolve_policy(profile)
+    run_id = create_run(task=task, model=model, access_level=access_level, profile=profile, policy=effective_policy)
+    if not bool(effective_policy.get("allow_multi_agent", False)):
+        _add_cost_event(
+            run_id,
+            "policy_block",
+            "Policy blocks multi-agent mode",
+            {"reason": "allow_multi_agent", "policy": effective_policy},
+            "planner",
+        )
+        set_run_phase(run_id, "failed")
+        finish_run(run_id, "blocked", "Policy blocks multi-agent mode")
+        run = get_run(run_id)
+        return {"ok": False, "run_id": run_id, "iterations": [], "events": run["events"] if run else [], "error": "Policy blocks multi-agent mode"}
+    set_run_phase(run_id, "analyzing")
     budget = BudgetCheck(max_cost_usd=max_cost_usd or 0.5)
 
     _add_cost_event(run_id, "analyze", "Multi-agent task started", {"task": task, "max_cost_usd": budget.max_cost_usd}, "planner")
@@ -152,24 +167,42 @@ def run_multi_agent_task(
         assert_can_run_autonomous(access_level)
     except PermissionError as exc:
         _add_cost_event(run_id, "error", "Access denied", {"error": str(exc)}, "planner")
+        set_run_phase(run_id, "failed")
         finish_run(run_id, "blocked", str(exc))
         run = get_run(run_id)
         return {"ok": False, "run_id": run_id, "error": str(exc), "events": run["events"] if run else []}
 
     context = _context_snapshot()
+    set_run_phase(run_id, "tool_selection")
     tool_decision = decide_tools(task, context, access_level)
     _add_cost_event(run_id, "tool_decision", "Tool Decision", tool_decision, "planner")
     if tool_decision.get("use_search", False):
         context = _augment_context_with_search(context, task, bool(tool_decision.get("use_files", False)))
 
     use_plugins = bool(tool_decision.get("use_plugins", False)) and can_run_autonomous(access_level)
-    use_tests = can_run_tests(access_level) and (
+    use_tests = bool(effective_policy.get("allow_shell", False)) and can_run_tests(access_level) and (
         bool(tool_decision.get("use_tests", False)) or can_run_autonomous(access_level)
     )
+    if not bool(effective_policy.get("allow_shell", False)):
+        _add_cost_event(run_id, "policy_warning", "Shell execution disabled by policy", {"reason": "allow_shell", "policy": effective_policy}, "tester")
     iterations: list[dict] = []
 
     for i in range(1, 4):
+        run_state = get_run(run_id) or {}
+        if runtime_exceeded(run_state.get("created_at"), int(effective_policy.get("max_runtime_minutes", 10))):
+            _add_cost_event(
+                run_id,
+                "policy_block",
+                "Runtime limit exceeded",
+                {"reason": "max_runtime_minutes", "policy": effective_policy},
+                "reviewer",
+            )
+            set_run_phase(run_id, "failed")
+            finish_run(run_id, "failed", "Policy runtime limit exceeded")
+            run = get_run(run_id)
+            return {"ok": False, "run_id": run_id, "iterations": iterations, "events": run["events"] if run else [], "error": "Policy runtime limit exceeded"}
         iteration: dict[str, Any] = {"iteration": i}
+        set_run_phase(run_id, "planning")
 
         plan_meta = _normalize_role_output(planner(task, context, model=model), "planner", model)
         if not budget.can_spend(plan_meta["estimated_cost_usd"]):
@@ -201,6 +234,7 @@ def run_multi_agent_task(
 
         patch_results: list[dict] = []
         if can_write_files(access_level):
+            set_run_phase(run_id, "patching")
             patch_results = _apply_patches(code_meta.get("json", {}).get("patches", []), access_level, run_id=run_id, iteration=i)
             for p in patch_results:
                 payload = {
@@ -221,6 +255,7 @@ def run_multi_agent_task(
         build_result = {"ok": False, "output": "Build not permitted"}
         test_result = {"ok": False, "output": "Tests not permitted"}
         if use_tests:
+            set_run_phase(run_id, "testing")
             build_result = run_build(access_level=access_level)
             test_result = run_tests(access_level=access_level)
         _add_cost_event(run_id, "build", f"Iteration {i}: build", build_result, "tester")
@@ -245,6 +280,7 @@ def run_multi_agent_task(
             iteration["status"] = "done"
             iterations.append(iteration)
             _add_cost_event(run_id, "result", "Multi-agent finished", {"iteration": i, "estimated_total_cost_usd": round(budget.current_cost_usd, 6)}, "reviewer")
+            set_run_phase(run_id, "completed")
             finish_run(run_id, "done", "Build and tests passed")
             run = get_run(run_id)
             return {"ok": True, "run_id": run_id, "iterations": iterations, "events": run["events"] if run else [], "estimated_total_cost_usd": round(budget.current_cost_usd, 6)}
@@ -265,6 +301,7 @@ def run_multi_agent_task(
         iterations.append(iteration)
 
     _add_cost_event(run_id, "result", "Multi-agent reached iteration limit", {"status": "failed", "estimated_total_cost_usd": round(budget.current_cost_usd, 6)}, "fixer")
+    set_run_phase(run_id, "failed")
     finish_run(run_id, "failed", "Max iterations reached")
     run = get_run(run_id)
     return {"ok": False, "run_id": run_id, "iterations": iterations, "events": run["events"] if run else [], "error": "Max iterations reached", "estimated_total_cost_usd": round(budget.current_cost_usd, 6)}
