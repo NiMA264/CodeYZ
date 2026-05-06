@@ -49,6 +49,7 @@ let filteredCommandActions = [];
 let toastTimer = null;
 let paletteCloseTimer = null;
 let shortcutCloseTimer = null;
+let shortcutWasFocused = null;
 const expandedSummaryDetails = new Set();
 const undoStack = [];
 const redoStack = [];
@@ -238,6 +239,11 @@ function initCollapsibles() {
     collapsiblePanels.set(panelId, panel);
     applyCollapsedState(panel, !!prefs.panelState?.[panelId]);
     const toggle = panel.querySelector("[data-collapse-toggle]");
+    const body = panel.querySelector(".collapsible-body");
+    if (toggle && body) {
+      if (!body.id) body.id = `${panelId}-collapsible-body`;
+      toggle.setAttribute("aria-controls", body.id);
+    }
     if (!toggle) continue;
     toggle.addEventListener("click", () => {
       const collapsed = !panel.classList.contains("collapsed");
@@ -302,6 +308,20 @@ function setLayoutWidths(sidebarWidth, explorerWidth) {
 
   document.documentElement.style.setProperty("--sidebar-w", `${nextSidebar}px`);
   document.documentElement.style.setProperty("--explorer-w", `${nextExplorer}px`);
+  updateResizeAriaValues(nextSidebar, nextExplorer);
+}
+
+function updateResizeAriaValues(sidebarWidth, explorerWidth) {
+  if (els.leftResizeHandleEl) {
+    els.leftResizeHandleEl.setAttribute("aria-valuemin", String(SIDEBAR_MIN));
+    els.leftResizeHandleEl.setAttribute("aria-valuemax", String(SIDEBAR_MAX));
+    els.leftResizeHandleEl.setAttribute("aria-valuenow", String(Math.round(sidebarWidth)));
+  }
+  if (els.rightResizeHandleEl) {
+    els.rightResizeHandleEl.setAttribute("aria-valuemin", String(EXPLORER_MIN));
+    els.rightResizeHandleEl.setAttribute("aria-valuemax", String(EXPLORER_MAX));
+    els.rightResizeHandleEl.setAttribute("aria-valuenow", String(Math.round(explorerWidth)));
+  }
 }
 
 function readLayoutWidths() {
@@ -847,6 +867,7 @@ function renderCommandPalette() {
   filteredCommandActions = buildActionRows(query);
   normalizePaletteSelection();
   els.commandListEl.innerHTML = "";
+  els.commandListEl.setAttribute("aria-activedescendant", "");
   if (filteredCommandActions.length === 0) {
     const empty = document.createElement("div");
     empty.className = "command-empty";
@@ -904,7 +925,11 @@ function renderCommandPalette() {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "command-item";
+    btn.id = `command-option-${idx}`;
+    btn.setAttribute("role", "option");
+    btn.setAttribute("aria-selected", idx === paletteSelectedIndex ? "true" : "false");
     if (idx === paletteSelectedIndex) btn.classList.add("active");
+    if (idx === paletteSelectedIndex) els.commandListEl.setAttribute("aria-activedescendant", btn.id);
     btn.appendChild(getCommandDisplayLabel(item.action, item.highlightIndices || [], !!item.isRecent));
     btn.addEventListener("click", () => {
       closeCommandPalette();
@@ -977,8 +1002,11 @@ function openShortcutHelp() {
     clearTimeout(shortcutCloseTimer);
     shortcutCloseTimer = null;
   }
+  shortcutWasFocused = document.activeElement;
   overlay.classList.remove("hidden");
   requestAnimationFrame(() => overlay.classList.add("is-open"));
+  const closeBtn = document.getElementById("shortcut-help-close");
+  if (closeBtn instanceof HTMLElement) closeBtn.focus();
 }
 
 function closeShortcutHelp() {
@@ -989,6 +1017,7 @@ function closeShortcutHelp() {
   shortcutCloseTimer = setTimeout(() => {
     overlay.classList.add("hidden");
     shortcutCloseTimer = null;
+    if (shortcutWasFocused && shortcutWasFocused instanceof HTMLElement) shortcutWasFocused.focus();
   }, 170);
 }
 

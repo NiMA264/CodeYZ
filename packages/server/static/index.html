@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -46,14 +46,14 @@
       <section class="panel collapsible" data-collapsible data-panel-id="timeline">
         <button type="button" class="collapse-toggle" data-collapse-toggle aria-expanded="true">
           <span>Task Timeline</span>
-          <span class="collapse-icon">▾</span>
+          <span class="collapse-icon">&#9662;</span>
         </button>
         <div class="collapsible-body">
           <div id="runs-list" class="runs-list"></div>
           <div id="tool-decision-card" class="tool-decision-card collapsible" data-collapsible data-panel-id="tool_decision">
             <button type="button" class="collapse-toggle sub-toggle" data-collapse-toggle aria-expanded="true">
               <span>Tool Decision</span>
-              <span class="collapse-icon">▾</span>
+              <span class="collapse-icon">&#9662;</span>
             </button>
             <div class="collapsible-body">
               <div class="tool-decision-grid">
@@ -77,7 +77,7 @@
       <section class="panel collapsible" data-collapsible data-panel-id="plugins">
         <button type="button" class="collapse-toggle" data-collapse-toggle aria-expanded="true">
           <span>Plugins</span>
-          <span class="collapse-icon">▾</span>
+          <span class="collapse-icon">&#9662;</span>
         </button>
         <div class="collapsible-body">
           <div id="plugins-list" class="runs-list"></div>
@@ -114,7 +114,7 @@
       </div>
     </aside>
 
-    <div id="left-resize-handle" class="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize left sidebar" tabindex="0"></div>
+    <div id="left-resize-handle" class="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize left sidebar" aria-valuemin="220" aria-valuemax="480" aria-valuenow="260" tabindex="0"></div>
 
     <section class="chat-area">
       <section class="focus-mode-bar">
@@ -134,7 +134,7 @@
         <div class="workflow-head">
           <button type="button" class="collapse-toggle workflow-toggle" data-collapse-toggle aria-expanded="true">
             <span>Workflow</span>
-            <span class="collapse-icon">▾</span>
+            <span class="collapse-icon">&#9662;</span>
           </button>
           <span id="workflow-run-state" class="workflow-run-state">Kein Run ausgewählt</span>
         </div>
@@ -163,7 +163,7 @@
 
       <form id="chat-form" class="composer">
         <div class="composer-top">
-          <button id="attach-btn" type="button" class="pill">+</button>
+          <button id="attach-btn" type="button" class="pill" aria-label="Attach files">+</button>
           <select id="model-select" class="pill">
             <option>gpt-5.4-mini</option>
             <option>gpt-5.4</option>
@@ -232,13 +232,13 @@
       <p id="status" class="status" hidden>Lade...</p>
     </section>
 
-    <div id="right-resize-handle" class="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize right explorer"></div>
+    <div id="right-resize-handle" class="resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize right explorer" aria-valuemin="260" aria-valuemax="560" aria-valuenow="320" tabindex="0"></div>
 
     <aside class="explorer-pane collapsible" id="explorer-pane" data-collapsible data-panel-id="explorer">
       <header class="explorer-header">
         <button type="button" class="collapse-toggle" data-collapse-toggle aria-expanded="true">
           <span>Explorer</span>
-          <span class="collapse-icon">▾</span>
+          <span class="collapse-icon">&#9662;</span>
         </button>
         <button id="toggle-explorer" type="button">Ausblenden</button>
       </header>
@@ -268,23 +268,23 @@
     <button id="onboarding-got-it" type="button">Got it</button>
   </aside>
 
-  <div id="command-palette" class="command-palette hidden" role="dialog" aria-modal="true" aria-label="Quick actions">
+  <div id="command-palette" class="command-palette hidden" role="dialog" aria-modal="true" aria-labelledby="command-palette-title">
     <div class="command-backdrop" id="command-backdrop"></div>
     <section class="command-panel" id="command-panel" tabindex="-1">
       <header class="command-head">
-        <h3>Quick Actions</h3>
-        <span class="command-hint">↑ ↓ Enter Esc</span>
+        <h3 id="command-palette-title">Quick Actions</h3>
+        <span class="command-hint">Up Down Enter Esc</span>
       </header>
       <input id="command-input" class="command-input" type="text" placeholder="Type a command..." autocomplete="off" />
-      <div id="command-list" class="command-list"></div>
+      <div id="command-list" class="command-list" role="listbox" aria-label="Available commands"></div>
     </section>
   </div>
 
-  <div id="shortcut-help-overlay" class="shortcut-help-overlay hidden" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts help">
+  <div id="shortcut-help-overlay" class="shortcut-help-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title">
     <div id="shortcut-help-backdrop" class="shortcut-help-backdrop"></div>
     <section class="shortcut-help-panel">
       <header class="shortcut-help-head">
-        <h3>Keyboard Shortcuts</h3>
+        <h3 id="shortcut-help-title">Keyboard Shortcuts</h3>
         <button id="shortcut-help-close" type="button" class="pill">Close</button>
       </header>
       <ul class="shortcut-help-list">
