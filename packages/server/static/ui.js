@@ -47,6 +47,8 @@ let paletteWasFocused = null;
 let commandActions = [];
 let filteredCommandActions = [];
 let toastTimer = null;
+let paletteCloseTimer = null;
+let shortcutCloseTimer = null;
 const expandedSummaryDetails = new Set();
 const undoStack = [];
 const redoStack = [];
@@ -905,8 +907,8 @@ function renderCommandPalette() {
     if (idx === paletteSelectedIndex) btn.classList.add("active");
     btn.appendChild(getCommandDisplayLabel(item.action, item.highlightIndices || [], !!item.isRecent));
     btn.addEventListener("click", () => {
-      runCommandAction(item.action);
       closeCommandPalette();
+      requestAnimationFrame(() => runCommandAction(item.action));
     });
     els.commandListEl.appendChild(btn);
   });
@@ -914,11 +916,16 @@ function renderCommandPalette() {
 
 function openCommandPalette() {
   if (!els.commandPaletteEl || !els.commandPanelEl) return;
+  if (paletteCloseTimer) {
+    clearTimeout(paletteCloseTimer);
+    paletteCloseTimer = null;
+  }
   paletteWasFocused = document.activeElement;
   commandActions = buildCommandActions();
   filteredCommandActions = [...commandActions];
   paletteSelectedIndex = 0;
   els.commandPaletteEl.classList.remove("hidden");
+  requestAnimationFrame(() => els.commandPaletteEl?.classList.add("is-open"));
   renderCommandPalette();
   if (els.commandInputEl) {
     els.commandInputEl.value = "";
@@ -930,10 +937,15 @@ function openCommandPalette() {
 
 function closeCommandPalette() {
   if (!els.commandPaletteEl) return;
-  els.commandPaletteEl.classList.add("hidden");
-  if (paletteWasFocused && paletteWasFocused instanceof HTMLElement) {
-    paletteWasFocused.focus();
-  }
+  els.commandPaletteEl.classList.remove("is-open");
+  if (paletteCloseTimer) clearTimeout(paletteCloseTimer);
+  paletteCloseTimer = setTimeout(() => {
+    els.commandPaletteEl?.classList.add("hidden");
+    paletteCloseTimer = null;
+    if (paletteWasFocused && paletteWasFocused instanceof HTMLElement) {
+      paletteWasFocused.focus();
+    }
+  }, 170);
 }
 
 function paletteIsOpen() {
@@ -949,8 +961,8 @@ function movePaletteSelection(delta) {
 function executePaletteSelection() {
   const selected = getSelectedPaletteItem();
   if (!selected) return;
-  runCommandAction(selected.action);
   closeCommandPalette();
+  requestAnimationFrame(() => runCommandAction(selected.action));
 }
 
 function shortcutHelpIsOpen() {
@@ -961,13 +973,23 @@ function shortcutHelpIsOpen() {
 function openShortcutHelp() {
   const overlay = document.getElementById("shortcut-help-overlay");
   if (!overlay) return;
+  if (shortcutCloseTimer) {
+    clearTimeout(shortcutCloseTimer);
+    shortcutCloseTimer = null;
+  }
   overlay.classList.remove("hidden");
+  requestAnimationFrame(() => overlay.classList.add("is-open"));
 }
 
 function closeShortcutHelp() {
   const overlay = document.getElementById("shortcut-help-overlay");
   if (!overlay) return;
-  overlay.classList.add("hidden");
+  overlay.classList.remove("is-open");
+  if (shortcutCloseTimer) clearTimeout(shortcutCloseTimer);
+  shortcutCloseTimer = setTimeout(() => {
+    overlay.classList.add("hidden");
+    shortcutCloseTimer = null;
+  }, 170);
 }
 
 function bindShortcutHelpOverlay() {

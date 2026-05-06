@@ -268,6 +268,18 @@
     <button id="onboarding-got-it" type="button">Got it</button>
   </aside>
 
+  <div id="command-palette" class="command-palette hidden" role="dialog" aria-modal="true" aria-label="Quick actions">
+    <div class="command-backdrop" id="command-backdrop"></div>
+    <section class="command-panel" id="command-panel" tabindex="-1">
+      <header class="command-head">
+        <h3>Quick Actions</h3>
+        <span class="command-hint">↑ ↓ Enter Esc</span>
+      </header>
+      <input id="command-input" class="command-input" type="text" placeholder="Type a command..." autocomplete="off" />
+      <div id="command-list" class="command-list"></div>
+    </section>
+  </div>
+
   <div id="shortcut-help-overlay" class="shortcut-help-overlay hidden" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts help">
     <div id="shortcut-help-backdrop" class="shortcut-help-backdrop"></div>
     <section class="shortcut-help-panel">
@@ -286,6 +298,7 @@
       <p class="shortcut-help-foot">Open this help with <code>Ctrl+/</code></p>
     </section>
   </div>
+  <div id="ui-toast" class="ui-toast hidden" aria-live="polite"></div>
 
   <script type="module" src="/ui/app.js"></script>
 </body>
