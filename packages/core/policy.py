@@ -138,3 +138,139 @@ def runtime_exceeded(created_at_iso: str | None, max_runtime_minutes: int) -> bo
     now = datetime.now(timezone.utc)
     elapsed_minutes = (now - created).total_seconds() / 60.0
     return elapsed_minutes > max(float(max_runtime_minutes), 0.0)
+
+
+def evaluate_constraints(
+    *,
+    policy: dict[str, object] | None,
+    metrics: dict[str, object] | None = None,
+    run_state: dict[str, object] | None = None,
+    patch_meta: dict[str, object] | None = None,
+    runtime: dict[str, object] | None = None,
+    action: str = "general",
+) -> dict[str, object]:
+    effective = normalize_policy(policy if isinstance(policy, dict) else {})
+    m = metrics if isinstance(metrics, dict) else {}
+    rs = run_state if isinstance(run_state, dict) else {}
+    pm = patch_meta if isinstance(patch_meta, dict) else {}
+    rt = runtime if isinstance(runtime, dict) else {}
+
+    checks: list[dict[str, object]] = []
+    reasons: list[str] = []
+
+    def _add_check(name: str, severity: str, message: str, triggered: bool, details: dict[str, object] | None = None) -> None:
+        checks.append(
+            {
+                "constraint": name,
+                "severity": severity,
+                "message": message[:220],
+                "triggered": bool(triggered),
+                "details": details or {},
+            }
+        )
+        if triggered:
+            reasons.append(name)
+
+    files_changed = int(m.get("files_changed_count") or 0)
+    added_lines = int(m.get("added_lines") or 0)
+    removed_lines = int(m.get("removed_lines") or 0)
+    risk_level = str(pm.get("risk_level") or m.get("risk_level_summary") or "unknown").lower()
+    file_status = str(pm.get("file_status") or "unknown").lower()
+    wants_shell = bool(rt.get("wants_shell", False))
+    wants_multi_agent = bool(rt.get("wants_multi_agent", False))
+    wants_tests = bool(rt.get("wants_tests", False))
+    tests_ok = bool(rt.get("tests_ok", False))
+    created_at = str(rs.get("created_at") or "")
+
+    _add_check(
+        "max_files_changed",
+        "blocked",
+        "Maximum changed files exceeded",
+        files_changed > int(effective["max_files_changed"]),
+        {"value": files_changed, "limit": int(effective["max_files_changed"])},
+    )
+    _add_check(
+        "max_added_lines",
+        "approval_required",
+        "Maximum added lines exceeded",
+        added_lines > int(effective["max_added_lines"]),
+        {"value": added_lines, "limit": int(effective["max_added_lines"])},
+    )
+    _add_check(
+        "max_removed_lines",
+        "approval_required",
+        "Maximum removed lines exceeded",
+        removed_lines > int(effective["max_removed_lines"]),
+        {"value": removed_lines, "limit": int(effective["max_removed_lines"])},
+    )
+    _add_check(
+        "allow_delete",
+        "blocked",
+        "Deletes are blocked by policy",
+        file_status == "deleted" and not bool(effective["allow_delete"]),
+        {"file_status": file_status},
+    )
+    _add_check(
+        "allow_rename",
+        "blocked",
+        "Renames are blocked by policy",
+        file_status == "renamed" and not bool(effective["allow_rename"]),
+        {"file_status": file_status},
+    )
+    _add_check(
+        "allow_shell",
+        "warning",
+        "Shell execution is disabled by policy",
+        wants_shell and not bool(effective["allow_shell"]),
+    )
+    _add_check(
+        "allow_multi_agent",
+        "blocked",
+        "Multi-agent mode is disabled by policy",
+        wants_multi_agent and not bool(effective["allow_multi_agent"]),
+    )
+    _add_check(
+        "max_risk_level",
+        "approval_required",
+        "Risk level exceeds policy",
+        risk_level in RISK_ORDER and risk_exceeds(str(effective["max_risk_level"]), risk_level),
+        {"risk_level": risk_level, "max": str(effective["max_risk_level"])},
+    )
+    _add_check(
+        "require_approval",
+        "approval_required",
+        "Policy requires explicit approval",
+        action == "patch" and bool(effective["require_approval"]),
+    )
+    _add_check(
+        "require_tests",
+        "approval_required",
+        "Policy requires passing tests",
+        wants_tests and bool(effective["require_tests"]) and not tests_ok,
+    )
+    _add_check(
+        "max_runtime_minutes",
+        "blocked",
+        "Runtime limit exceeded",
+        runtime_exceeded(created_at, int(effective["max_runtime_minutes"])),
+        {"limit_minutes": int(effective["max_runtime_minutes"])},
+    )
+
+    blocked = any(bool(c["triggered"]) and c["severity"] == "blocked" for c in checks)
+    requires_approval = any(bool(c["triggered"]) and c["severity"] == "approval_required" for c in checks)
+    warnings = [c for c in checks if bool(c["triggered"]) and c["severity"] == "warning"]
+    violations = [c for c in checks if bool(c["triggered"]) and c["severity"] in {"blocked", "approval_required"}]
+
+    return {
+        "action": action,
+        "blocked": blocked,
+        "requires_approval": requires_approval and not blocked,
+        "warnings": warnings,
+        "violations": violations,
+        "reasons": sorted(set(reasons)),
+        "risk_level": risk_level,
+        "triggered_constraints": [c["constraint"] for c in checks if bool(c["triggered"])],
+        "checks": checks,
+        "severity": "blocked" if blocked else ("approval_required" if requires_approval else ("warning" if warnings else "info")),
+        "policy": effective,
+    }

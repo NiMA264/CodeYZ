@@ -4,7 +4,7 @@ from packages.core.agents import coder, fixer, planner, reviewer, tester
 from packages.core.costs import BudgetCheck
 from packages.core.executor import run_build, run_tests, summarize_errors
 from packages.core.indexer import search_files
-from packages.core.policy import resolve_policy, runtime_exceeded
+from packages.core.policy import evaluate_constraints, resolve_policy
 from packages.core.patcher import (
     PatchApprovalRequired,
     apply_ast_patch,
@@ -19,7 +19,7 @@ from packages.core.permissions import (
     can_run_tests,
     can_write_files,
 )
-from packages.core.task_runs import add_event, create_run, finish_run, get_run, set_run_phase
+from packages.core.task_runs import add_event, create_checkpoint, create_run, finish_run, get_run, set_run_phase
 from packages.core.tool_selector import decide_tools
 from packages.tools.files import list_files
 from packages.tools.git import git_diff
@@ -83,6 +83,7 @@ def _apply_patches(patches: list[dict], access_level: str | None, run_id: str | 
                 approval_required=True,
             )
             if run_id is not None:
+                cp = create_checkpoint(run_id, reason="before_approval_required", current_action="approval_required")
                 _add_cost_event(
                     run_id,
                     "approval_required",
@@ -94,6 +95,9 @@ def _apply_patches(patches: list[dict], access_level: str | None, run_id: str | 
                         "stats": exc.stats,
                         "patch_preview": preview[:1000],
                         "patch": patch_payload,
+                        "checkpoint_before_approval": cp.get("checkpoint_id", "") if isinstance(cp, dict) else "",
+                        "resumable_phase": cp.get("phase", "approval_required") if isinstance(cp, dict) else "approval_required",
+                        "resume_sequence": int(cp.get("sequence", 0) or 0) if isinstance(cp, dict) else 0,
                         "iteration": iteration or 0,
                         **meta,
                     },
@@ -107,6 +111,22 @@ def _apply_patches(patches: list[dict], access_level: str | None, run_id: str | 
 
 def _add_cost_event(run_id: str, event_type: str, title: str, payload: dict, role: str) -> None:
     add_event(run_id, event_type, title, payload, agent_role=role)
+
+
+def _emit_constraint_events(run_id: str, result: dict[str, object], role: str) -> None:
+    warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+    violations = result.get("violations") if isinstance(result.get("violations"), list) else []
+    for item in warnings:
+        if not isinstance(item, dict):
+            continue
+        _add_cost_event(run_id, "policy_warning", "Policy warning", {"reason": item.get("constraint"), "constraint_result": result}, role)
+    for item in violations:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("severity")) == "blocked":
+            _add_cost_event(run_id, "policy_block", "Policy blocked action", {"reason": item.get("constraint"), "constraint_result": result}, role)
+        else:
+            _add_cost_event(run_id, "policy_approval_required", "Policy requires approval", {"reason": item.get("constraint"), "constraint_result": result}, role)
 
 
 def _maybe_run_plugin(plan_meta: dict, access_level: str | None) -> dict | None:
@@ -146,12 +166,17 @@ def run_multi_agent_task(
 ) -> dict[str, Any]:
     effective_policy = resolve_policy(profile)
     run_id = create_run(task=task, model=model, access_level=access_level, profile=profile, policy=effective_policy)
-    if not bool(effective_policy.get("allow_multi_agent", False)):
+    multi_eval = evaluate_constraints(
+        policy=effective_policy,
+        runtime={"wants_multi_agent": True},
+        action="multi_agent",
+    )
+    if bool(multi_eval.get("blocked")):
         _add_cost_event(
             run_id,
             "policy_block",
             "Policy blocks multi-agent mode",
-            {"reason": "allow_multi_agent", "policy": effective_policy},
+            {"reason": "allow_multi_agent", "policy": effective_policy, "constraint_result": multi_eval},
             "planner",
         )
         set_run_phase(run_id, "failed")
@@ -180,23 +205,24 @@ def run_multi_agent_task(
         context = _augment_context_with_search(context, task, bool(tool_decision.get("use_files", False)))
 
     use_plugins = bool(tool_decision.get("use_plugins", False)) and can_run_autonomous(access_level)
-    use_tests = bool(effective_policy.get("allow_shell", False)) and can_run_tests(access_level) and (
+    shell_eval = evaluate_constraints(
+        policy=effective_policy,
+        run_state=get_run(run_id) or {},
+        runtime={"wants_shell": True},
+        action="shell",
+    )
+    use_tests = not bool(shell_eval.get("warnings")) and can_run_tests(access_level) and (
         bool(tool_decision.get("use_tests", False)) or can_run_autonomous(access_level)
     )
-    if not bool(effective_policy.get("allow_shell", False)):
-        _add_cost_event(run_id, "policy_warning", "Shell execution disabled by policy", {"reason": "allow_shell", "policy": effective_policy}, "tester")
+    if bool(shell_eval.get("warnings")):
+        _emit_constraint_events(run_id, shell_eval, "tester")
     iterations: list[dict] = []
 
     for i in range(1, 4):
         run_state = get_run(run_id) or {}
-        if runtime_exceeded(run_state.get("created_at"), int(effective_policy.get("max_runtime_minutes", 10))):
-            _add_cost_event(
-                run_id,
-                "policy_block",
-                "Runtime limit exceeded",
-                {"reason": "max_runtime_minutes", "policy": effective_policy},
-                "reviewer",
-            )
+        runtime_eval = evaluate_constraints(policy=effective_policy, run_state=run_state, action="runtime")
+        if bool(runtime_eval.get("blocked")):
+            _emit_constraint_events(run_id, runtime_eval, "reviewer")
             set_run_phase(run_id, "failed")
             finish_run(run_id, "failed", "Policy runtime limit exceeded")
             run = get_run(run_id)

@@ -1,7 +1,14 @@
 ﻿import { apiGet, apiPost } from "./api.js";
 import { formatTimelineEvent } from "./event_format.js";
 import { els, state } from "./state.js";
-import { collectDiffFilesFromEvents, extractApprovalActions } from "./timeline_helpers.js";
+import {
+  buildDecisionExplanation,
+  buildReplayNavigation,
+  collectDiffFilesFromEvents,
+  extractApprovalActions,
+  groupReplaySections,
+  normalizeReplayEvents,
+} from "./timeline_helpers.js";
 
 const PHASE_KEYS = ["task", "plan", "patch", "tests", "diff", "approval"];
 const PHASE_EVENT_MAP = {
@@ -366,8 +373,15 @@ function renderRunMetrics(detail) {
     ["Policy warnings", metrics.policy_warnings_count ?? "0"],
     ["Policy violations", metrics.policy_violations_count ?? "0"],
     ["Blocked actions", metrics.blocked_actions_count ?? "0"],
+    ["Constraint evals", metrics.constraint_evaluations ?? "0"],
+    ["Approval triggers", metrics.approval_triggers ?? "0"],
+    ["Runtime limit hits", metrics.runtime_limit_hits ?? "0"],
+    ["Checkpoints", metrics.checkpoints_created ?? "0"],
+    ["Resume candidates", metrics.resume_candidates ?? "0"],
+    ["Approval waitpoints", metrics.approval_waitpoints ?? "0"],
     ["Status", metrics.final_status || detail?.status || "unknown"],
     ["Profile", metrics.profile || detail?.profile || "custom"],
+    ["Resume state", detail?.resume_state?.state || "unknown"],
   ];
   els.runMetricsSummaryEl.innerHTML = "";
   for (const [key, value] of rows) {
@@ -379,6 +393,107 @@ function renderRunMetrics(detail) {
     v.textContent = String(value ?? "-");
     els.runMetricsSummaryEl.appendChild(k);
     els.runMetricsSummaryEl.appendChild(v);
+  }
+}
+
+function formatEventTime(ts) {
+  if (!ts) return "--:--:--";
+  const date = new Date(String(ts));
+  if (Number.isNaN(date.getTime())) return "--:--:--";
+  return date.toLocaleTimeString([], { hour12: false });
+}
+
+function renderReplayNavigation(events, detail) {
+  if (!els.replayNavSummaryEl) return;
+  const nav = buildReplayNavigation(events || []);
+  const replay = detail && typeof detail.replay === "object" ? detail.replay : {};
+  const rows = [
+    ["Events", nav.totalEvents ?? 0],
+    ["First seq", nav.firstSequence ?? 0],
+    ["Last seq", nav.lastSequence ?? 0],
+    ["Sections", Array.isArray(nav.sections) ? nav.sections.length : 0],
+    ["Checkpoints", Array.isArray(replay.checkpoints) ? replay.checkpoints.length : 0],
+    ["Resume", detail?.resume_state?.state || "unknown"],
+  ];
+  els.replayNavSummaryEl.innerHTML = "";
+  for (const [k, v] of rows) {
+    const keyEl = document.createElement("span");
+    keyEl.className = "run-metric-key";
+    keyEl.textContent = `${k}:`;
+    const valEl = document.createElement("span");
+    valEl.className = "run-metric-value";
+    valEl.textContent = String(v);
+    els.replayNavSummaryEl.appendChild(keyEl);
+    els.replayNavSummaryEl.appendChild(valEl);
+  }
+}
+
+function renderReplayViewer(events, detail) {
+  if (!els.runReplayViewerEl) return;
+  els.runReplayViewerEl.innerHTML = "";
+  const sections = groupReplaySections(events || []);
+  if (!Array.isArray(sections) || sections.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "event-group-empty";
+    empty.textContent = "Keine Replay-Schritte verfügbar.";
+    els.runReplayViewerEl.appendChild(empty);
+    return;
+  }
+  const replay = detail && typeof detail.replay === "object" ? detail.replay : {};
+  const checkpointList = Array.isArray(replay.checkpoints) ? replay.checkpoints : [];
+  for (const section of sections) {
+    const details = document.createElement("details");
+    details.className = "event-group";
+    details.open = true;
+    const summary = document.createElement("summary");
+    summary.className = "event-group-summary";
+    summary.textContent = `${section.phase} · seq ${section.startSequence}-${section.endSequence} (${section.events.length})`;
+    details.appendChild(summary);
+    const list = document.createElement("div");
+    list.className = "event-group-items";
+    for (const event of section.events || []) {
+      const row = document.createElement("div");
+      row.className = "event-group-item";
+      const explanation = event.decision_explanation || buildDecisionExplanation(event);
+      const title = `[${formatEventTime(event.ts)}] #${event.sequence} ${event.event_type} · ${String(explanation.severity || "info")}`;
+      const reasonText = Array.isArray(explanation.reasons) && explanation.reasons.length > 0 ? `\nreasons: ${explanation.reasons.join(", ")}` : "";
+      const snapshot = event.metrics_snapshot && typeof event.metrics_snapshot === "object"
+        ? `\nmetrics: files=${event.metrics_snapshot.files_changed_count ?? 0} +${event.metrics_snapshot.added_lines ?? 0}/-${event.metrics_snapshot.removed_lines ?? 0}`
+        : "";
+      const cps = checkpointList.filter((cp) => Number(cp.sequence || 0) === Number(event.sequence || -1));
+      const cpText = cps.length > 0 ? `\ncheckpoint: ${String(cps[0].checkpoint_id || "").slice(0, 8)} reason=${cps[0].reason || "-"}` : "";
+      row.textContent = `${title}\n${event.title || ""}${reasonText}${snapshot}${cpText}`.trim();
+      list.appendChild(row);
+    }
+    details.appendChild(list);
+    els.runReplayViewerEl.appendChild(details);
+  }
+}
+
+function renderAuditTrail(events) {
+  if (!els.runAuditTrailEl) return;
+  els.runAuditTrailEl.innerHTML = "";
+  const normalized = normalizeReplayEvents(events || []);
+  const relevant = normalized.filter((e) =>
+    ["policy_warning", "policy_block", "policy_approval_required", "approval_required", "approval_applied"].includes(String(e.event_type || ""))
+  );
+  if (relevant.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "event-group-empty";
+    empty.textContent = "Keine Audit-Entscheidungen verfügbar.";
+    els.runAuditTrailEl.appendChild(empty);
+    return;
+  }
+  for (const event of relevant) {
+    const card = document.createElement("div");
+    card.className = "event-group-single";
+    const ex = event.decision_explanation || buildDecisionExplanation(event);
+    const reasons = Array.isArray(ex.reasons) && ex.reasons.length > 0 ? ex.reasons.join(", ") : "none";
+    const data = event.data && typeof event.data === "object" ? event.data : {};
+    const resumeRef = data.resume_sequence ? ` | resume_seq: ${data.resume_sequence}` : "";
+    const cpRef = data.checkpoint_before_approval ? ` | checkpoint: ${String(data.checkpoint_before_approval).slice(0, 8)}` : "";
+    card.textContent = `#${event.sequence} ${ex.title} [${ex.severity}] | reasons: ${reasons}${resumeRef}${cpRef}`;
+    els.runAuditTrailEl.appendChild(card);
   }
 }
 
@@ -397,10 +512,14 @@ function renderReplay(detail) {
     for (const row of formatTimelineEvent(event)) lines.push(row);
   }
   els.runReplayContentEl.textContent = lines.join("\n");
+  const normalizedEvents = normalizeReplayEvents(detail.events || []);
   renderRunMetrics(detail);
   renderCurrentAction(detail);
-  renderDiffViewer(detail.events || []);
-  renderEventGroups(detail.events || []);
+  renderReplayNavigation(normalizedEvents, detail);
+  renderReplayViewer(normalizedEvents, detail);
+  renderAuditTrail(normalizedEvents);
+  renderDiffViewer(normalizedEvents);
+  renderEventGroups(normalizedEvents);
 }
 
 function parseEventTimestampMs(event, fallbackIndex) {

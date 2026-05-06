@@ -10,6 +10,7 @@ from packages.core.permissions import can_run_autonomous
 from packages.core.task_runs import (
     add_event,
     claim_approval_event,
+    create_checkpoint,
     get_event,
     get_run,
     has_approval_applied,
@@ -112,6 +113,7 @@ def approve_patch(run_id: str, event_id: str) -> dict:
         )
 
     set_run_phase(run_id, "approval_required")
+    checkpoint_before = create_checkpoint(run_id, reason="before_approval_apply", current_action="approval_wait")
     data = event.get("data") or {}
     patch = data.get("patch") if isinstance(data, dict) else None
     if not isinstance(patch, dict):
@@ -155,7 +157,11 @@ def approve_patch(run_id: str, event_id: str) -> dict:
         "removed_lines": out.get("removed_lines", data.get("removed_lines", 0)),
         "approval_required": False,
         "files_changed_count": out.get("files_changed_count", data.get("files_changed_count", 1)),
+        "checkpoint_before_approval": (checkpoint_before or {}).get("checkpoint_id", ""),
+        "resumable_phase": (checkpoint_before or {}).get("phase", "approval_required"),
+        "resume_sequence": int((checkpoint_before or {}).get("sequence", 0) or 0),
     }
     applied_event = add_event(run_id, "approval_applied", "Approved patch applied", payload, agent_role="reviewer")
+    create_checkpoint(run_id, reason="after_approval_applied", current_action="approval_applied")
     mark_approval_event(run_id, event_id, "applied")
     return {"ok": True, "run_id": run_id, "event": applied_event, "result": out}

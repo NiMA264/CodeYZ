@@ -158,3 +158,114 @@ export function collectDiffFilesFromEvents(events) {
 
   return Array.from(fileMap.values()).sort((a, b) => a.file.localeCompare(b.file));
 }
+
+function eventSeverity(event) {
+  const type = String(event?.event_type || "unknown");
+  if (type === "policy_block" || type === "error") return "blocked";
+  if (type === "policy_approval_required" || type === "approval_required") return "approval_required";
+  if (type === "policy_warning") return "warning";
+  return "info";
+}
+
+function buildReasonsFromConstraintResult(constraintResult) {
+  if (!constraintResult || typeof constraintResult !== "object") return [];
+  const triggered = Array.isArray(constraintResult.triggered_constraints) ? constraintResult.triggered_constraints : [];
+  return triggered.map((x) => String(x));
+}
+
+export function buildDecisionExplanation(event) {
+  const type = String(event?.event_type || "unknown");
+  const data = event?.data && typeof event.data === "object" ? event.data : {};
+  const constraintResult = data.constraint_result && typeof data.constraint_result === "object" ? data.constraint_result : null;
+  const reasons = [];
+  const reason = String(data.reason || "");
+  if (reason) reasons.push(reason);
+  for (const item of buildReasonsFromConstraintResult(constraintResult)) reasons.push(item);
+  if (Array.isArray(data.reasons)) {
+    for (const r of data.reasons) reasons.push(String(r));
+  }
+  const uniqueReasons = Array.from(new Set(reasons.filter(Boolean)));
+  let title = "Run event";
+  if (type === "policy_block") title = "Action blocked by policy";
+  else if (type === "policy_approval_required") title = "Approval required by policy";
+  else if (type === "policy_warning") title = "Policy warning";
+  else if (type === "approval_required") title = "Approval required";
+  else if (type === "approval_applied") title = "Approval applied";
+  else if (type === "diff") title = "Patch diff generated";
+  else if (type === "test") title = "Test result";
+  else if (type === "run_phase") title = "Phase transition";
+  return {
+    title,
+    reasons: uniqueReasons,
+    severity: eventSeverity(event),
+  };
+}
+
+export function normalizeReplayEvents(events) {
+  const list = Array.isArray(events) ? events : [];
+  const normalized = list.map((event, index) => {
+    const seqRaw = Number(event?.sequence || 0);
+    const sequence = Number.isFinite(seqRaw) && seqRaw > 0 ? seqRaw : index + 1;
+    const ts = String(event?.ts || event?.timestamp || event?.created_at || "");
+    const phase = String(event?.phase || "unknown");
+    const status = String(event?.status || "unknown");
+    const metricsSnapshot = event?.metrics_snapshot && typeof event.metrics_snapshot === "object" ? event.metrics_snapshot : {};
+    const decision = buildDecisionExplanation(event);
+    return {
+      ...event,
+      sequence,
+      ts,
+      phase,
+      status,
+      metrics_snapshot: metricsSnapshot,
+      decision_explanation: decision,
+      severity: decision.severity,
+    };
+  });
+  normalized.sort((a, b) => {
+    const s = Number(a.sequence || 0) - Number(b.sequence || 0);
+    if (s !== 0) return s;
+    const t = String(a.ts || "").localeCompare(String(b.ts || ""));
+    if (t !== 0) return t;
+    return String(a.event_id || "").localeCompare(String(b.event_id || ""));
+  });
+  return normalized;
+}
+
+export function groupReplaySections(events) {
+  const out = [];
+  let current = null;
+  for (const event of normalizeReplayEvents(events)) {
+    const phase = String(event.phase || "unknown");
+    if (!current || current.phase !== phase) {
+      current = {
+        phase,
+        startSequence: Number(event.sequence || 0),
+        endSequence: Number(event.sequence || 0),
+        events: [event],
+      };
+      out.push(current);
+      continue;
+    }
+    current.events.push(event);
+    current.endSequence = Number(event.sequence || current.endSequence);
+  }
+  return out;
+}
+
+export function buildReplayNavigation(events) {
+  const normalized = normalizeReplayEvents(events);
+  const sections = groupReplaySections(normalized);
+  const sequenceList = normalized.map((event) => Number(event.sequence || 0)).filter((n) => Number.isFinite(n) && n > 0);
+  return {
+    totalEvents: normalized.length,
+    firstSequence: sequenceList.length > 0 ? Math.min(...sequenceList) : 0,
+    lastSequence: sequenceList.length > 0 ? Math.max(...sequenceList) : 0,
+    sections: sections.map((s) => ({
+      phase: s.phase,
+      startSequence: s.startSequence,
+      endSequence: s.endSequence,
+      count: s.events.length,
+    })),
+  };
+}

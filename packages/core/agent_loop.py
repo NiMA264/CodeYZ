@@ -6,7 +6,7 @@ from openai import OpenAI
 
 from packages.core.agent_pipeline import run_multi_agent_task
 from packages.core.executor import run_build, run_tests, summarize_errors
-from packages.core.policy import resolve_policy, risk_exceeds, runtime_exceeded
+from packages.core.policy import evaluate_constraints, resolve_policy
 from packages.core.patcher import (
     PatchApprovalRequired,
     apply_ast_patch,
@@ -15,7 +15,7 @@ from packages.core.patcher import (
     build_diff_metadata,
 )
 from packages.core.permissions import assert_can_run_autonomous
-from packages.core.task_runs import add_event, create_run, finish_run, get_run, set_run_phase
+from packages.core.task_runs import add_event, create_checkpoint, create_run, finish_run, get_run, set_run_phase
 from packages.tools.files import list_files, read_file
 
 MODEL = os.getenv("CODEYZ_MODEL", "gpt-5.4-mini")
@@ -27,6 +27,22 @@ Rules:
 - Never commit, push, deploy.
 - Return strict JSON only.
 """.strip()
+
+
+def _emit_constraint_events(run_id: str, result: dict[str, object], *, role: str = "reviewer") -> None:
+    warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+    violations = result.get("violations") if isinstance(result.get("violations"), list) else []
+    for item in warnings:
+        if not isinstance(item, dict):
+            continue
+        add_event(run_id, "policy_warning", "Policy warning", {"reason": item.get("constraint"), "constraint_result": result}, agent_role=role)
+    for item in violations:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("severity")) == "blocked":
+            add_event(run_id, "policy_block", "Policy blocked action", {"reason": item.get("constraint"), "constraint_result": result}, agent_role=role)
+        else:
+            add_event(run_id, "policy_approval_required", "Policy requires approval", {"reason": item.get("constraint"), "constraint_result": result}, agent_role=role)
 
 
 def _client() -> OpenAI:
@@ -100,7 +116,12 @@ def run_autonomous_task(
 ) -> dict[str, Any]:
     effective_policy = resolve_policy(profile)
     if use_multi_agent:
-        if not bool(effective_policy.get("allow_multi_agent", False)):
+        pre = evaluate_constraints(
+            policy=effective_policy,
+            runtime={"wants_multi_agent": True},
+            action="multi_agent",
+        )
+        if bool(pre.get("blocked")):
             return {"ok": False, "run_id": "", "error": "Policy blocks multi-agent mode", "events": []}
         return run_multi_agent_task(task=task, access_level=access_level, model=model, max_cost_usd=max_cost_usd, profile=profile)
 
@@ -122,14 +143,9 @@ def run_autonomous_task(
 
     for iteration in range(1, 6):
         run_state = get_run(run_id) or {}
-        if runtime_exceeded(run_state.get("created_at"), int(effective_policy.get("max_runtime_minutes", 10))):
-            add_event(
-                run_id,
-                "policy_block",
-                "Runtime limit exceeded",
-                {"reason": "max_runtime_minutes", "policy": effective_policy},
-                agent_role="reviewer",
-            )
+        runtime_eval = evaluate_constraints(policy=effective_policy, run_state=run_state, action="runtime")
+        if bool(runtime_eval.get("blocked")):
+            _emit_constraint_events(run_id, runtime_eval)
             set_run_phase(run_id, "failed")
             finish_run(run_id, "failed", "Policy runtime limit exceeded")
             run = get_run(run_id)
@@ -169,20 +185,6 @@ def run_autonomous_task(
                 else:
                     patch_result = apply_patch(file_path, new_content, access_level=access_level, approved=approved)
 
-                if risk_exceeds(str(effective_policy.get("max_risk_level", "medium")), str(patch_result.get("risk_level", "low"))):
-                    set_run_phase(run_id, "approval_required")
-                    add_event(
-                        run_id,
-                        "policy_approval_required",
-                        "Patch risk exceeds policy limit",
-                        {
-                            "reason": "max_risk_level",
-                            "policy_max_risk_level": effective_policy.get("max_risk_level", "medium"),
-                            "patch_risk_level": patch_result.get("risk_level", "unknown"),
-                            "file": file_path,
-                        },
-                    )
-
                 patch_results.append(patch_result)
                 add_event(run_id, "patch", f"Iteration {iteration}: patched {file_path}", {"file": file_path, "rollback_id": patch_result.get("rollback_id")})
                 add_event(
@@ -204,35 +206,25 @@ def run_autonomous_task(
                 )
                 current = get_run(run_id) or {}
                 live_metrics = current.get("metrics", {}) if isinstance(current.get("metrics"), dict) else {}
-                max_files = int(effective_policy.get("max_files_changed", 5))
-                max_add = int(effective_policy.get("max_added_lines", 240))
-                max_remove = int(effective_policy.get("max_removed_lines", 120))
-                if patch_result.get("file_status") == "deleted" and not bool(effective_policy.get("allow_delete", False)):
-                    add_event(run_id, "policy_block", "Delete blocked by policy", {"reason": "allow_delete", "file": file_path, "policy": effective_policy})
+                patch_eval = evaluate_constraints(
+                    policy=effective_policy,
+                    metrics=live_metrics,
+                    run_state=current,
+                    patch_meta={
+                        "file_status": patch_result.get("file_status", "unknown"),
+                        "risk_level": patch_result.get("risk_level", "unknown"),
+                    },
+                    action="patch",
+                )
+                if bool(patch_eval.get("blocked")) or bool(patch_eval.get("requires_approval")):
+                    _emit_constraint_events(run_id, patch_eval)
+                if bool(patch_eval.get("requires_approval")):
+                    set_run_phase(run_id, "approval_required")
+                if bool(patch_eval.get("blocked")):
                     set_run_phase(run_id, "failed")
-                    finish_run(run_id, "failed", "Policy blocked delete")
+                    finish_run(run_id, "failed", "Policy blocked patch")
                     run = get_run(run_id)
-                    return {"ok": False, "run_id": run_id, "error": "Policy blocked delete", "events": run["events"] if run else []}
-                if int(live_metrics.get("files_changed_count", 0)) > max_files:
-                    add_event(run_id, "policy_block", "Too many files changed", {"reason": "max_files_changed", "limit": max_files, "policy": effective_policy})
-                    set_run_phase(run_id, "failed")
-                    finish_run(run_id, "failed", "Policy max_files_changed exceeded")
-                    run = get_run(run_id)
-                    return {"ok": False, "run_id": run_id, "error": "Policy max_files_changed exceeded", "events": run["events"] if run else []}
-                if int(live_metrics.get("added_lines", 0)) > max_add or int(live_metrics.get("removed_lines", 0)) > max_remove:
-                    add_event(
-                        run_id,
-                        "policy_approval_required",
-                        "Line-change limit exceeded",
-                        {
-                            "reason": "line_limits",
-                            "max_added_lines": max_add,
-                            "max_removed_lines": max_remove,
-                            "added_lines": live_metrics.get("added_lines", 0),
-                            "removed_lines": live_metrics.get("removed_lines", 0),
-                            "policy": effective_policy,
-                        },
-                    )
+                    return {"ok": False, "run_id": run_id, "error": "Policy blocked patch", "events": run["events"] if run else []}
             except PatchApprovalRequired as exc:
                 patch_payload = {"file_path": file_path}
                 if unified_diff:
@@ -260,6 +252,10 @@ def run_autonomous_task(
                     "policy": effective_policy,
                     **meta,
                 }
+                cp = create_checkpoint(run_id, reason="before_approval_required", current_action="approval_required")
+                approval_payload["checkpoint_before_approval"] = cp.get("checkpoint_id", "") if isinstance(cp, dict) else ""
+                approval_payload["resumable_phase"] = cp.get("phase", "approval_required") if isinstance(cp, dict) else "approval_required"
+                approval_payload["resume_sequence"] = int(cp.get("sequence", 0) or 0) if isinstance(cp, dict) else 0
                 patch_results.append({"file": file_path, "diff": "", "archive": "", "error": str(exc)})
                 set_run_phase(run_id, "approval_required")
                 add_event(run_id, "policy_approval_required", "Policy requires approval", {"reason": "require_approval", "file": file_path})
@@ -272,11 +268,17 @@ def run_autonomous_task(
         step["patches"] = patch_results
 
         set_run_phase(run_id, "testing")
-        if bool(effective_policy.get("allow_shell", False)):
+        shell_eval = evaluate_constraints(
+            policy=effective_policy,
+            run_state=get_run(run_id) or {},
+            runtime={"wants_shell": True},
+            action="shell",
+        )
+        if not bool(shell_eval.get("blocked")) and not bool(shell_eval.get("warnings")) and bool(effective_policy.get("allow_shell", False)):
             build_result = run_build(access_level=access_level)
             test_result = run_tests(access_level=access_level)
         else:
-            add_event(run_id, "policy_warning", "Shell execution disabled by policy", {"reason": "allow_shell", "policy": effective_policy}, agent_role="tester")
+            _emit_constraint_events(run_id, shell_eval, role="tester")
             build_result = {"ok": False, "output": "Build disabled by policy (allow_shell=false)"}
             test_result = {"ok": False, "output": "Tests disabled by policy (allow_shell=false)"}
 
@@ -294,14 +296,14 @@ def run_autonomous_task(
             run = get_run(run_id)
             return {"ok": True, "run_id": run_id, "iterations": logs, "events": run["events"] if run else []}
 
-        if bool(effective_policy.get("require_tests", False)) and not bool(test_result.get("ok")):
-            add_event(
-                run_id,
-                "policy_approval_required",
-                "Policy requires passing tests before completion",
-                {"reason": "require_tests", "policy": effective_policy},
-                agent_role="tester",
-            )
+        test_eval = evaluate_constraints(
+            policy=effective_policy,
+            run_state=get_run(run_id) or {},
+            runtime={"wants_tests": True, "tests_ok": bool(test_result.get("ok"))},
+            action="tests",
+        )
+        if bool(test_eval.get("requires_approval")) or bool(test_eval.get("blocked")):
+            _emit_constraint_events(run_id, test_eval, role="tester")
 
         step["status"] = "needs_fix"
         last_error = summarize_errors(str(build_result.get("output", "")), str(test_result.get("output", "")))

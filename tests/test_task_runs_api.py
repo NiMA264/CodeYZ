@@ -54,6 +54,8 @@ def test_task_run_detail_exposes_phase_for_running_run(monkeypatch) -> None:
     assert payload["metrics"]["current_phase"] == "planning"
     assert payload["metrics"]["duration_ms"] >= 0
     assert isinstance(payload.get("policy"), dict)
+    assert isinstance(payload.get("resume_state"), dict)
+    assert isinstance(payload.get("checkpoints"), list)
 
 
 def test_task_run_detail_preserves_approval_required_event(monkeypatch) -> None:
@@ -136,6 +138,8 @@ def test_approve_patch_applies_exact_stored_patch_and_emits_event(monkeypatch, t
         assert "added_lines" in payload["event"]["data"]
         assert "removed_lines" in payload["event"]["data"]
         assert payload["event"]["data"]["approval_required"] is False
+        assert "checkpoint_before_approval" in payload["event"]["data"]
+        assert "resume_sequence" in payload["event"]["data"]
         assert payload["result"]["rollback_id"]
         assert "line2-approved" in target.read_text(encoding="utf-8")
     finally:

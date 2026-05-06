@@ -103,3 +103,46 @@ console.log(JSON.stringify(files));
     assert len(data) == 1
     assert data[0]["status"] == "deleted"
     assert data[0]["removedLines"] == 4
+
+
+def test_normalize_replay_events_and_navigation_are_deterministic() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    script = """
+import { normalizeReplayEvents, buildReplayNavigation } from './packages/server/static/timeline_helpers.js';
+const events = [
+  { event_id: 'b', event_type: 'policy_warning', sequence: 2, ts: '2026-01-01T00:00:02Z', phase: 'patching', status: 'running', data: { reason: 'allow_shell', constraint_result: { triggered_constraints: ['allow_shell'] } } },
+  { event_id: 'a', event_type: 'plan', sequence: 1, ts: '2026-01-01T00:00:01Z', phase: 'planning', status: 'running', data: {} },
+];
+const normalized = normalizeReplayEvents(events);
+const nav = buildReplayNavigation(events);
+console.log(JSON.stringify({ normalized, nav }));
+"""
+    out = _run_node(script, repo)
+    payload = json.loads(out)
+    normalized = payload["normalized"]
+    nav = payload["nav"]
+    assert [ev["sequence"] for ev in normalized] == [1, 2]
+    assert normalized[1]["decision_explanation"]["severity"] == "warning"
+    assert nav["totalEvents"] == 2
+    assert nav["firstSequence"] == 1
+    assert nav["lastSequence"] == 2
+
+
+def test_build_decision_explanation_uses_constraint_reasons() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    script = """
+import { buildDecisionExplanation } from './packages/server/static/timeline_helpers.js';
+const ex = buildDecisionExplanation({
+  event_type: 'policy_block',
+  data: {
+    reason: 'max_runtime_minutes',
+    constraint_result: { triggered_constraints: ['max_runtime_minutes', 'allow_shell'] },
+  },
+});
+console.log(JSON.stringify(ex));
+"""
+    out = _run_node(script, repo)
+    ex = json.loads(out)
+    assert ex["severity"] == "blocked"
+    assert ex["title"] == "Action blocked by policy"
+    assert "max_runtime_minutes" in ex["reasons"]

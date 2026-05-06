@@ -34,6 +34,13 @@ RUN_PHASES = {
     "failed",
     "cancelled",
 }
+RESUME_STATES = {
+    "resumable",
+    "waiting_for_approval",
+    "completed",
+    "failed_non_resumable",
+    "cancelled",
+}
 
 
 def _parse_iso(ts: str | None) -> datetime | None:
@@ -167,6 +174,13 @@ def _build_run_metrics(run: dict, live: bool = False) -> dict:
     policy_warnings_count = 0
     blocked_actions_count = 0
     policy_trigger_reasons: list[str] = []
+    constraint_evaluations = 0
+    approval_triggers = 0
+    blocked_constraints: list[str] = []
+    warning_constraints: list[str] = []
+    runtime_limit_hits = 0
+    checkpoints_created = len(run.get("checkpoints", [])) if isinstance(run.get("checkpoints"), list) else 0
+    approval_waitpoints = 0
     tool_usage = {"search": False, "plugins": False, "tests": False, "files": False}
 
     for event in events:
@@ -203,6 +217,7 @@ def _build_run_metrics(run: dict, live: bool = False) -> dict:
 
         if event_type == "approval_required":
             approvals_requested += 1
+            approval_waitpoints += 1
             file_path = str(data.get("file") or "")
             if file_path:
                 files_changed.add(file_path)
@@ -242,17 +257,28 @@ def _build_run_metrics(run: dict, live: bool = False) -> dict:
             reason = str(data.get("reason") or "")
             if reason:
                 policy_trigger_reasons.append(reason)
+                warning_constraints.append(reason)
+            if isinstance(data.get("constraint_result"), dict):
+                constraint_evaluations += 1
         if event_type == "policy_block":
             policy_violations_count += 1
             blocked_actions_count += 1
             reason = str(data.get("reason") or "")
             if reason:
                 policy_trigger_reasons.append(reason)
+                blocked_constraints.append(reason)
+                if reason == "max_runtime_minutes":
+                    runtime_limit_hits += 1
+            if isinstance(data.get("constraint_result"), dict):
+                constraint_evaluations += 1
         if event_type == "policy_approval_required":
             policy_violations_count += 1
             reason = str(data.get("reason") or "")
             if reason:
                 policy_trigger_reasons.append(reason)
+                approval_triggers += 1
+            if isinstance(data.get("constraint_result"), dict):
+                constraint_evaluations += 1
 
         token_input += int(data.get("estimated_input_tokens") or 0)
         token_output += int(data.get("estimated_output_tokens") or 0)
@@ -296,6 +322,15 @@ def _build_run_metrics(run: dict, live: bool = False) -> dict:
         "policy_warnings_count": policy_warnings_count,
         "blocked_actions_count": blocked_actions_count,
         "policy_trigger_reasons": sorted(set(policy_trigger_reasons))[:20],
+        "constraint_evaluations": constraint_evaluations,
+        "approval_triggers": approval_triggers,
+        "blocked_constraints": sorted(set(blocked_constraints))[:20],
+        "warning_constraints": sorted(set(warning_constraints))[:20],
+        "runtime_limit_hits": runtime_limit_hits,
+        "checkpoints_created": checkpoints_created,
+        "approval_waitpoints": approval_waitpoints,
+        "resume_candidates": 1 if bool(_derive_resume_state(run).get("resume_candidate")) else 0,
+        "resumable_runs": 1 if str(_derive_resume_state(run).get("state")) in {"resumable", "waiting_for_approval"} else 0,
     }
 
 
@@ -331,6 +366,127 @@ def _append_jsonl(record: dict) -> None:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def _normalize_event_for_replay(run: dict, raw_event: dict, sequence: int) -> dict:
+    phase = _resolve_phase(run)
+    status = str(run.get("status", "running"))
+    event = {
+        "event_id": str(raw_event.get("event_id", uuid4().hex)),
+        "ts": str(raw_event.get("ts", _now_iso())),
+        "event_type": str(raw_event.get("event_type", "unknown")),
+        "agent_role": _sanitize(str(raw_event.get("agent_role", ""))),
+        "title": _sanitize(str(raw_event.get("title", ""))),
+        "data": _sanitize(raw_event.get("data")),
+        "sequence": int(sequence),
+        "phase": phase,
+        "status": status,
+        "metrics_snapshot": {
+            "files_changed_count": int(raw_event.get("metrics_snapshot", {}).get("files_changed_count", 0))
+            if isinstance(raw_event.get("metrics_snapshot"), dict)
+            else int((_build_run_metrics(run, live=True)).get("files_changed_count", 0)),
+            "added_lines": int((_build_run_metrics(run, live=True)).get("added_lines", 0)),
+            "removed_lines": int((_build_run_metrics(run, live=True)).get("removed_lines", 0)),
+            "approvals_requested": int((_build_run_metrics(run, live=True)).get("approvals_requested", 0)),
+            "approvals_applied": int((_build_run_metrics(run, live=True)).get("approvals_applied", 0)),
+            "policy_violations_count": int((_build_run_metrics(run, live=True)).get("policy_violations_count", 0)),
+            "policy_warnings_count": int((_build_run_metrics(run, live=True)).get("policy_warnings_count", 0)),
+        },
+    }
+    return event
+
+
+def _pending_approval_event_ids(run: dict) -> list[str]:
+    events = run.get("events", []) if isinstance(run.get("events"), list) else []
+    required: list[str] = []
+    applied: set[str] = set()
+    for ev in events:
+        if str(ev.get("event_type", "")) == "approval_required":
+            required.append(str(ev.get("event_id", "")))
+        elif str(ev.get("event_type", "")) == "approval_applied":
+            data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+            src = str(data.get("source_event_id", ""))
+            if src:
+                applied.add(src)
+    out = []
+    for event_id in required:
+        if event_id and event_id not in applied:
+            out.append(event_id)
+    return out
+
+
+def _derive_resume_state(run: dict) -> dict:
+    status = str(run.get("status", "running")).lower()
+    phase = _resolve_phase(run)
+    checkpoints = run.get("checkpoints", []) if isinstance(run.get("checkpoints"), list) else []
+    last_checkpoint = checkpoints[-1] if checkpoints else None
+    pending_approvals = _pending_approval_event_ids(run)
+    if status in {"done", "success"}:
+        state = "completed"
+        reason = "run_completed"
+    elif status in {"cancelled", "canceled"}:
+        state = "cancelled"
+        reason = "run_cancelled"
+    elif pending_approvals or phase == "approval_required":
+        state = "waiting_for_approval"
+        reason = "pending_approval"
+    elif status in {"failed", "blocked", "budget_blocked"}:
+        state = "failed_non_resumable"
+        reason = "failed_terminal"
+    else:
+        state = "resumable"
+        reason = "active_checkpoint"
+    if state not in RESUME_STATES:
+        state = "failed_non_resumable"
+        reason = "unknown_state"
+    return {
+        "state": state,
+        "resume_candidate": state in {"resumable", "waiting_for_approval"},
+        "latest_checkpoint_id": str(last_checkpoint.get("checkpoint_id", "")) if isinstance(last_checkpoint, dict) else "",
+        "resume_sequence": int(last_checkpoint.get("sequence", 0) or 0) if isinstance(last_checkpoint, dict) else 0,
+        "resumable_phase": str(last_checkpoint.get("phase", phase)) if isinstance(last_checkpoint, dict) else phase,
+        "reason": reason,
+        "pending_approvals": pending_approvals,
+    }
+
+
+def _build_replay_payload(run: dict) -> dict:
+    events = run.get("events", []) if isinstance(run.get("events"), list) else []
+    normalized = sorted(
+        [event for event in events if isinstance(event, dict)],
+        key=lambda ev: (int(ev.get("sequence", 0) or 0), str(ev.get("ts", "")), str(ev.get("event_id", ""))),
+    )
+    phase_sections: list[dict] = []
+    current: dict | None = None
+    for event in normalized:
+        phase = str(event.get("phase", "unknown"))
+        seq = int(event.get("sequence", 0) or 0)
+        if current is None or str(current.get("phase")) != phase:
+            current = {"phase": phase, "start_sequence": seq, "end_sequence": seq, "count": 1}
+            phase_sections.append(current)
+        else:
+            current["end_sequence"] = seq
+            current["count"] = int(current.get("count", 0)) + 1
+    first_seq = int(normalized[0].get("sequence", 0) or 0) if normalized else 0
+    last_seq = int(normalized[-1].get("sequence", 0) or 0) if normalized else 0
+    return {
+        "total_events": len(normalized),
+        "first_sequence": first_seq,
+        "last_sequence": last_seq,
+        "phase_sections": phase_sections,
+        "checkpoints": [
+            {
+                "checkpoint_id": str(cp.get("checkpoint_id", "")),
+                "sequence": int(cp.get("sequence", 0) or 0),
+                "phase": str(cp.get("phase", "unknown")),
+                "status": str(cp.get("status", "unknown")),
+                "created_at": str(cp.get("created_at", "")),
+                "reason": str(cp.get("reason", "")),
+            }
+            for cp in (run.get("checkpoints", []) if isinstance(run.get("checkpoints"), list) else [])
+            if isinstance(cp, dict)
+        ],
+    }
+
+
 def _save_approval_state(run_id: str, source_event_id: str, status: str) -> None:
     _append_jsonl(
         {
@@ -364,6 +520,7 @@ def create_run(
         "policy": _sanitize(policy or {}),
         "phase": "created",
         "events": [],
+        "checkpoints": [],
         "approval_states": {},
         "metrics": {},
     }
@@ -384,6 +541,7 @@ def create_run(
             "profile": run["profile"],
             "policy": run["policy"],
             "phase": run["phase"],
+            "checkpoints": run["checkpoints"],
             "approval_states": run["approval_states"],
             "metrics": run["metrics"],
             "ts": run["created_at"],
@@ -411,9 +569,38 @@ def add_event(
         run = _RUNS.get(run_id)
         if run is None:
             raise ValueError("Unknown run_id")
-        run["events"].append(event)
-    _append_jsonl({"kind": "event", "run_id": run_id, **event})
-    return event
+        sequence = len(run.get("events", [])) + 1
+        normalized = _normalize_event_for_replay(run, event, sequence)
+        run["events"].append(normalized)
+    _append_jsonl({"kind": "event", "run_id": run_id, **normalized})
+    return normalized
+
+
+def create_checkpoint(run_id: str, reason: str, current_action: str | None = None) -> dict | None:
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            return None
+        checkpoint = {
+            "checkpoint_id": uuid4().hex,
+            "run_id": run_id,
+            "sequence": len(run.get("events", [])),
+            "phase": _resolve_phase(run),
+            "status": str(run.get("status", "running")),
+            "metrics_snapshot": _build_run_metrics(run, live=True),
+            "active_policy": run.get("policy", {}) if isinstance(run.get("policy"), dict) else {},
+            "current_profile": str(run.get("profile", "custom")),
+            "pending_approvals": _pending_approval_event_ids(run),
+            "resume_candidate": False,
+            "reason": str(reason or "manual"),
+            "current_action": str(current_action or ""),
+            "created_at": _now_iso(),
+        }
+        run.setdefault("checkpoints", []).append(checkpoint)
+        resume = _derive_resume_state(run)
+        checkpoint["resume_candidate"] = bool(resume.get("resume_candidate"))
+    _append_jsonl({"kind": "checkpoint", "run_id": run_id, **checkpoint})
+    return checkpoint
 
 
 def finish_run(run_id: str, status: str, summary: str | None = None) -> dict:
@@ -431,6 +618,7 @@ def finish_run(run_id: str, status: str, summary: str | None = None) -> dict:
         elif run["status"] in {"cancelled", "canceled"}:
             run["phase"] = "cancelled"
         run["metrics"] = _build_run_metrics(run)
+    create_checkpoint(run_id, reason=f"before_finish:{status}", current_action="finish_run")
     _append_jsonl(
         {
             "kind": "run_finished",
@@ -469,6 +657,8 @@ def list_runs() -> list[dict]:
                 "policy": _RUNS[rid].get("policy", {}),
                 "phase": _resolve_phase(_RUNS[rid]),
                 "metrics": _metrics_for(_RUNS[rid]),
+                "resume_state": _derive_resume_state(_RUNS[rid]),
+                "checkpoints_count": len(_RUNS[rid].get("checkpoints", [])) if isinstance(_RUNS[rid].get("checkpoints"), list) else 0,
             }
             for rid in ids
         ]
@@ -493,6 +683,9 @@ def get_run(run_id: str) -> dict | None:
             "phase": _resolve_phase(run),
             "metrics": _build_run_metrics(run, live=(str(run.get("status", "")) == "running")),
             "events": list(run["events"]),
+            "replay": _build_replay_payload(run),
+            "checkpoints": list(run.get("checkpoints", [])) if isinstance(run.get("checkpoints"), list) else [],
+            "resume_state": _derive_resume_state(run),
         }
 
 
@@ -504,8 +697,11 @@ def set_run_phase(run_id: str, phase: str) -> dict | None:
         run = _RUNS.get(run_id)
         if run is None:
             return None
+        previous = str(run.get("phase", "created"))
         run["phase"] = safe_phase
     _append_jsonl({"kind": "run_phase", "run_id": run_id, "phase": safe_phase, "ts": _now_iso()})
+    if previous != safe_phase:
+        create_checkpoint(run_id, reason=f"phase:{previous}->{safe_phase}", current_action=safe_phase)
     return get_run(run_id)
 
 
@@ -606,9 +802,13 @@ def _load_runs_unlocked() -> None:
                 "policy": _sanitize(record.get("policy", {}) if isinstance(record.get("policy"), dict) else {}),
                 "phase": str(record.get("phase", "created") or "created"),
                 "events": [],
+                "checkpoints": [],
                 "approval_states": {},
                 "metrics": record.get("metrics", {}) if isinstance(record.get("metrics"), dict) else {},
             }
+            checkpoints = record.get("checkpoints", [])
+            if isinstance(checkpoints, list):
+                run["checkpoints"] = [_sanitize(cp) for cp in checkpoints if isinstance(cp, dict)]
             approval_states = record.get("approval_states", {})
             if isinstance(approval_states, dict):
                 run["approval_states"] = {
@@ -626,14 +826,19 @@ def _load_runs_unlocked() -> None:
             continue
 
         if kind == "event":
-            event = {
+            raw_event = {
                 "event_id": str(record.get("event_id", uuid4().hex)),
                 "ts": str(record.get("ts", _now_iso())),
                 "event_type": str(record.get("event_type", "unknown")),
                 "agent_role": _sanitize(str(record.get("agent_role", ""))),
                 "title": _sanitize(str(record.get("title", ""))),
                 "data": _sanitize(record.get("data")),
+                "sequence": int(record.get("sequence", 0) or 0),
             }
+            seq = int(raw_event.get("sequence", 0) or 0)
+            if seq <= 0:
+                seq = len(run.get("events", [])) + 1
+            event = _normalize_event_for_replay(run, raw_event, seq)
             run["events"].append(event)
         elif kind == "run_finished":
             run["status"] = _sanitize(str(record.get("status", run["status"])))
@@ -653,6 +858,23 @@ def _load_runs_unlocked() -> None:
             phase = str(record.get("phase", "") or "")
             if phase in RUN_PHASES:
                 run["phase"] = phase
+        elif kind == "checkpoint":
+            checkpoint = {
+                "checkpoint_id": str(record.get("checkpoint_id", uuid4().hex)),
+                "run_id": run_id,
+                "sequence": int(record.get("sequence", 0) or 0),
+                "phase": str(record.get("phase", run.get("phase", "created"))),
+                "status": str(record.get("status", run.get("status", "running"))),
+                "metrics_snapshot": _sanitize(record.get("metrics_snapshot", {}) if isinstance(record.get("metrics_snapshot"), dict) else {}),
+                "active_policy": _sanitize(record.get("active_policy", {}) if isinstance(record.get("active_policy"), dict) else {}),
+                "current_profile": str(record.get("current_profile", run.get("profile", "custom"))),
+                "pending_approvals": [str(x) for x in (record.get("pending_approvals", []) if isinstance(record.get("pending_approvals"), list) else [])],
+                "resume_candidate": bool(record.get("resume_candidate", False)),
+                "reason": str(record.get("reason", "")),
+                "current_action": str(record.get("current_action", "")),
+                "created_at": str(record.get("created_at", record.get("ts", _now_iso()))),
+            }
+            run.setdefault("checkpoints", []).append(checkpoint)
         elif kind == "approval_state":
             source_event_id = str(record.get("source_event_id", ""))
             status = str(record.get("status", ""))
@@ -661,6 +883,13 @@ def _load_runs_unlocked() -> None:
 
     _RUNS.clear()
     _RUNS.update(runs)
+    for run in _RUNS.values():
+        events = run.get("events", [])
+        if isinstance(events, list):
+            events.sort(key=lambda ev: (int(ev.get("sequence", 0) or 0), str(ev.get("ts", "")), str(ev.get("event_id", ""))))
+        checkpoints = run.get("checkpoints", [])
+        if isinstance(checkpoints, list):
+            checkpoints.sort(key=lambda cp: (int(cp.get("sequence", 0) or 0), str(cp.get("created_at", "")), str(cp.get("checkpoint_id", ""))))
     _RUN_ORDER.clear()
     _RUN_ORDER.extend(order)
 
@@ -708,6 +937,7 @@ def compact_runs_storage() -> None:
                         "profile": run.get("profile", "custom"),
                         "policy": run.get("policy", {}) if isinstance(run.get("policy"), dict) else {},
                         "phase": _resolve_phase(run),
+                        "checkpoints": run.get("checkpoints", []) if isinstance(run.get("checkpoints"), list) else [],
                         "approval_states": cleaned_states,
                         "metrics": run.get("metrics", {}) if isinstance(run.get("metrics"), dict) else {},
                         "ts": run.get("created_at", _now_iso()),
@@ -726,7 +956,34 @@ def compact_runs_storage() -> None:
                             "agent_role": str(event.get("agent_role", "")),
                             "title": str(event.get("title", "")),
                             "data": event.get("data"),
+                            "sequence": int(event.get("sequence", 0) or 0),
+                            "phase": str(event.get("phase", "")),
+                            "status": str(event.get("status", "")),
+                            "metrics_snapshot": event.get("metrics_snapshot", {}) if isinstance(event.get("metrics_snapshot"), dict) else {},
                             "ts": str(event.get("ts", _now_iso())),
+                        }
+                    )
+
+                for checkpoint in run.get("checkpoints", []):
+                    if not isinstance(checkpoint, dict):
+                        continue
+                    records.append(
+                        {
+                            "kind": "checkpoint",
+                            "run_id": run_id,
+                            "checkpoint_id": str(checkpoint.get("checkpoint_id", uuid4().hex)),
+                            "sequence": int(checkpoint.get("sequence", 0) or 0),
+                            "phase": str(checkpoint.get("phase", _resolve_phase(run))),
+                            "status": str(checkpoint.get("status", run.get("status", "running"))),
+                            "metrics_snapshot": checkpoint.get("metrics_snapshot", {}) if isinstance(checkpoint.get("metrics_snapshot"), dict) else {},
+                            "active_policy": checkpoint.get("active_policy", {}) if isinstance(checkpoint.get("active_policy"), dict) else {},
+                            "current_profile": str(checkpoint.get("current_profile", run.get("profile", "custom"))),
+                            "pending_approvals": checkpoint.get("pending_approvals", []) if isinstance(checkpoint.get("pending_approvals"), list) else [],
+                            "resume_candidate": bool(checkpoint.get("resume_candidate", False)),
+                            "reason": str(checkpoint.get("reason", "")),
+                            "current_action": str(checkpoint.get("current_action", "")),
+                            "created_at": str(checkpoint.get("created_at", _now_iso())),
+                            "ts": str(checkpoint.get("created_at", _now_iso())),
                         }
                     )
 

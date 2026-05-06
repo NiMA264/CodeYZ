@@ -43,6 +43,9 @@ def test_ui_route_and_module_wiring() -> None:
     assert 'id="run-metrics-summary"' in html
     assert 'id="current-action-summary"' in html
     assert 'id="policy-summary"' in html
+    assert 'id="run-replay-viewer"' in html
+    assert 'id="run-audit-trail"' in html
+    assert 'id="replay-nav-summary"' in html
 
 
 @pytest.mark.skipif(
@@ -114,6 +117,9 @@ def test_ui_initializes_without_browser_errors() -> None:
             page.wait_for_selector("#run-metrics-summary")
             page.wait_for_selector("#current-action-summary")
             page.wait_for_selector("#policy-summary")
+            page.wait_for_selector("#run-replay-viewer")
+            page.wait_for_selector("#run-audit-trail")
+            page.wait_for_selector("#replay-nav-summary")
             browser.close()
 
         assert not page_errors, f"browser page errors: {page_errors}"
