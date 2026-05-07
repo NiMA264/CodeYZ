@@ -1,16 +1,15 @@
 ﻿import json
-import os
-
 from openai import OpenAI
 
 from packages.core.costs import estimate_cost
+from packages.core.settings import get_default_model, get_openai_api_key
 from packages.core.model_router import get_model_for_role
 
-DEFAULT_MODEL = os.getenv("CODEYZ_MODEL", "gpt-5.4-mini")
+DEFAULT_MODEL = get_default_model()
 
 
 def _client() -> OpenAI:
-    return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return OpenAI(api_key=get_openai_api_key())
 
 
 def _run(role: str, system_prompt: str, user_prompt: str, fallback_model: str | None = None) -> dict:

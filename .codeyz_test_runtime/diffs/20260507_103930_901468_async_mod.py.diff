@@ -1,0 +1,6 @@
+--- a/async_mod.py
++++ b/async_mod.py
+@@ -1,2 +1,2 @@
+ async def fetch():
+-    return 1
++    return 2

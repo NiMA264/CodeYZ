@@ -25,6 +25,35 @@ def test_task_policy_endpoint_returns_effective_policy(monkeypatch) -> None:
     assert "max_files_changed" in payload["policy"]
 
 
+def test_resume_endpoint_rejects_non_resumable(monkeypatch) -> None:
+    monkeypatch.setenv("CODEYZ_LOCAL_TOKEN", "token123")
+    run_id = create_run("resume api reject", "gpt-5.4-mini", "Autonom")
+    finish_run(run_id, "done", "ok")
+    client = TestClient(app)
+    res = client.post(f"/task/resume/{run_id}", headers={"x-api-key": "token123"})
+    assert res.status_code == 409
+    assert res.json()["code"] == "resume_rejected"
+
+
+def test_resume_validation_endpoint_exposes_transition_details(monkeypatch) -> None:
+    monkeypatch.setenv("CODEYZ_LOCAL_TOKEN", "token123")
+    run_id = create_run("resume validation", "gpt-5.4-mini", "Autonom")
+    client = TestClient(app)
+    res = client.get(
+        f"/task/runs/{run_id}/resume-validation",
+        params={"target_phase": "patching"},
+        headers={"x-api-key": "token123"},
+    )
+    assert res.status_code == 200
+    payload = res.json()["validation"]
+    assert "transition" in payload
+    assert "allowed" in payload
+    assert "blocking_conditions" in payload
+    assert "required_actions" in payload
+    assert "attempts_used" in payload
+    assert "attempts_limit" in payload
+
+
 def test_task_run_detail_exposes_metrics(monkeypatch) -> None:
     monkeypatch.setenv("CODEYZ_LOCAL_TOKEN", "token123")
     run_id = create_run("Task metrics api", "gpt-5.4-mini", "Autonom", profile="safe_mode")

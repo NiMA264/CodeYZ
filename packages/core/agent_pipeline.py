@@ -163,9 +163,17 @@ def run_multi_agent_task(
     model: str | None,
     max_cost_usd: float | None = None,
     profile: str | None = None,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     effective_policy = resolve_policy(profile)
-    run_id = create_run(task=task, model=model, access_level=access_level, profile=profile, policy=effective_policy)
+    run_id = create_run(
+        task=task,
+        model=model,
+        access_level=access_level,
+        profile=profile,
+        policy=effective_policy,
+        request_id=request_id,
+    )
     multi_eval = evaluate_constraints(
         policy=effective_policy,
         runtime={"wants_multi_agent": True},

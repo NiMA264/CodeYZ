@@ -355,6 +355,12 @@ textarea { resize: none; min-height: 42px; max-height: 180px; }
 }
 .run-metric-key { color: var(--muted); }
 .run-metric-value { text-align: right; color: #d7e6ff; }
+.resume-controls {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin: 8px 0;
+}
 
 .focus-mode-bar {
   display: flex;

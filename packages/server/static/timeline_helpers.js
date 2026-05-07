@@ -161,7 +161,7 @@ export function collectDiffFilesFromEvents(events) {
 
 function eventSeverity(event) {
   const type = String(event?.event_type || "unknown");
-  if (type === "policy_block" || type === "error") return "blocked";
+  if (type === "policy_block" || type === "error" || type === "resume_phase_failed") return "blocked";
   if (type === "policy_approval_required" || type === "approval_required") return "approval_required";
   if (type === "policy_warning") return "warning";
   return "info";
@@ -194,6 +194,10 @@ export function buildDecisionExplanation(event) {
   else if (type === "diff") title = "Patch diff generated";
   else if (type === "test") title = "Test result";
   else if (type === "run_phase") title = "Phase transition";
+  else if (type === "resume_phase_requested") title = "Resume transition requested";
+  else if (type === "resume_phase_started") title = "Resume transition started";
+  else if (type === "resume_phase_completed") title = "Resume transition completed";
+  else if (type === "resume_phase_failed") title = "Resume transition failed";
   return {
     title,
     reasons: uniqueReasons,

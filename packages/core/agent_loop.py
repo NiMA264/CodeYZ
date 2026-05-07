@@ -1,9 +1,9 @@
 ﻿import json
-import os
 from typing import Any
 
 from openai import OpenAI
 
+from packages.core.settings import ALLOWED_MODELS, get_default_model, get_openai_api_key
 from packages.core.agent_pipeline import run_multi_agent_task
 from packages.core.executor import run_build, run_tests, summarize_errors
 from packages.core.policy import evaluate_constraints, resolve_policy
@@ -18,8 +18,7 @@ from packages.core.permissions import assert_can_run_autonomous
 from packages.core.task_runs import add_event, create_checkpoint, create_run, finish_run, get_run, set_run_phase
 from packages.tools.files import list_files, read_file
 
-MODEL = os.getenv("CODEYZ_MODEL", "gpt-5.4-mini")
-ALLOWED_MODELS = {"gpt-5.4-mini", "gpt-5.4", "gpt-5.5"}
+MODEL = get_default_model()
 SYSTEM = """
 You are CodeYZ autonomous coding agent.
 Rules:
@@ -46,7 +45,7 @@ def _emit_constraint_events(run_id: str, result: dict[str, object], *, role: str
 
 
 def _client() -> OpenAI:
-    return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return OpenAI(api_key=get_openai_api_key())
 
 
 def _project_snapshot() -> str:
@@ -113,6 +112,7 @@ def run_autonomous_task(
     use_multi_agent: bool = False,
     max_cost_usd: float | None = None,
     profile: str | None = None,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     effective_policy = resolve_policy(profile)
     if use_multi_agent:
@@ -123,9 +123,23 @@ def run_autonomous_task(
         )
         if bool(pre.get("blocked")):
             return {"ok": False, "run_id": "", "error": "Policy blocks multi-agent mode", "events": []}
-        return run_multi_agent_task(task=task, access_level=access_level, model=model, max_cost_usd=max_cost_usd, profile=profile)
+        return run_multi_agent_task(
+            task=task,
+            access_level=access_level,
+            model=model,
+            max_cost_usd=max_cost_usd,
+            profile=profile,
+            request_id=request_id,
+        )
 
-    run_id = create_run(task=task, model=model, access_level=access_level, profile=profile, policy=effective_policy)
+    run_id = create_run(
+        task=task,
+        model=model,
+        access_level=access_level,
+        profile=profile,
+        policy=effective_policy,
+        request_id=request_id,
+    )
     set_run_phase(run_id, "analyzing")
     add_event(run_id, "analyze", "Autonomous task started", {"task": task, "policy": effective_policy})
 

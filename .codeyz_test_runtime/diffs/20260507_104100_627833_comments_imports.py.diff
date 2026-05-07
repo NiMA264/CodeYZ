@@ -1,0 +1,9 @@
+--- a/comments_imports.py
++++ b/comments_imports.py
+@@ -1,5 +1,6 @@
+ # leading comment
+ from os import path  # keep-this-comment
++from os import getenv
+ 
+ def run():
+     return path.join('a', 'b')

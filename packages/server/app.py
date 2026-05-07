@@ -1,7 +1,9 @@
 ﻿from pathlib import Path
 from contextlib import asynccontextmanager
 
+import logging
 import os
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -20,7 +22,9 @@ from packages.core.context_manager import (
 )
 from packages.core.context_policy import should_attach_code_context
 from packages.core.indexer import build_index, index_status, search_files
+from packages.core.logging_utils import log_structured
 from packages.core.permissions import READ_ONLY
+from packages.core.path_security import ensure_no_blocked_parts, ensure_within_root
 from packages.core.plugins import list_plugins, load_plugins, register_plugin
 from packages.core.project_paths import get_current_project
 from packages.core.sessions import add_message, create_session
@@ -28,7 +32,7 @@ from packages.core.sessions import initialize_sessions_storage
 from packages.core.task_runs import initialize_task_runs_storage
 from packages.core.workspace_context import build_workspace_context
 from packages.server.auth import require_auth
-from packages.server.errors import error_payload, raise_api_error
+from packages.server.errors import error_payload, error_response, raise_api_error
 from packages.server.routes_automation import router as automations_router
 from packages.server.routes_plugins import router as plugins_router
 from packages.server.routes_projects import router as projects_router
@@ -55,38 +59,73 @@ ALLOWED_MODES = {"Chat", "Code", "Review", "Fix", "Projekt planen"}
 ALLOWED_ACCESS = {"Nur lesen", "Dateien ändern", "Tests ausführen", "Autonom", "Gefährlich deaktiviert"}
 
 app.mount("/ui", StaticFiles(directory=STATIC_DIR, html=True), name="ui")
+logger = logging.getLogger(__name__)
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id", "") or uuid4().hex
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["x-request-id"] = request_id
+    return response
 
 
 
 @app.exception_handler(HTTPException)
-async def http_exception_handler(_request: Request, exc: HTTPException):  # type: ignore[override]
+async def http_exception_handler(request: Request, exc: HTTPException):  # type: ignore[override]
+    request_id = str(getattr(request.state, "request_id", ""))
     detail = exc.detail
     if isinstance(detail, dict) and {"ok", "code", "message", "hint"}.issubset(detail.keys()):
-        payload = detail
+        payload = dict(detail)
+        if request_id and "request_id" not in payload:
+            payload["request_id"] = request_id
     else:
         payload = error_payload(
             code=f"http_{exc.status_code}",
             message=str(detail) if detail else "Request failed",
             hint="Check request parameters or permissions.",
+            request_id=request_id,
         )
-    from fastapi.responses import JSONResponse
 
-    return JSONResponse(status_code=exc.status_code, content=payload)
+    log_structured(
+        logger,
+        logging.WARNING,
+        "http_exception",
+        component="api",
+        request_id=request_id,
+        code=str(payload.get("code", "")),
+        status_code=exc.status_code,
+    )
+
+    return error_response(
+        status_code=exc.status_code,
+        code=str(payload.get("code", f"http_{exc.status_code}")),
+        message=str(payload.get("message", "Request failed")),
+        hint=str(payload.get("hint", "")),
+        request_id=request_id,
+    )
 
 
 @app.exception_handler(RequestValidationError)
 async def request_validation_exception_handler(
-    _request: Request, exc: RequestValidationError
+    request: Request, exc: RequestValidationError
 ):  # type: ignore[override]
-    from fastapi.responses import JSONResponse
-
-    return JSONResponse(
+    request_id = str(getattr(request.state, "request_id", ""))
+    log_structured(
+        logger,
+        logging.WARNING,
+        "request_validation_error",
+        component="api",
+        request_id=request_id,
+        errors_count=len(exc.errors()),
+    )
+    return error_response(
         status_code=422,
-        content=error_payload(
-            code="validation_error",
-            message="Request validation failed",
-            hint=str(exc.errors()[:2]),
-        ),
+        code="validation_error",
+        message="Request validation failed",
+        hint=str(exc.errors()[:2]),
+        request_id=request_id,
     )
 
 
@@ -113,13 +152,10 @@ def _ping_handler(input_data: dict | None = None) -> dict[str, str]:
 
 def _resolve_file_in_current_project(rel_path: str) -> Path:
     root = Path(get_current_project()).resolve()
-    target = (root / rel_path).resolve()
-    if not str(target).startswith(str(root)):
-        raise ValueError("Path outside current project")
+    target = ensure_within_root(root / rel_path, root)
     if target.name in BLOCKED_NAMES:
         raise ValueError("Blocked file")
-    if any(part in BLOCKED_DIRS for part in target.parts):
-        raise ValueError("Blocked directory")
+    ensure_no_blocked_parts(target, BLOCKED_DIRS)
     if not target.exists() or not target.is_file():
         raise ValueError("File not found")
     return target

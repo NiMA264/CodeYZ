@@ -9,6 +9,7 @@ from rich.console import Console
 from packages.cli.setup import check_dependencies, check_environment, check_git
 from packages.core.agent import ask
 from packages.core.loop import run_task
+from packages.core.logging_utils import JsonFormatter
 from packages.core.runtime_paths import ensure_runtime_dirs, get_env_file_path
 from scripts.release_zip import build_release_zip
 from packages.tools.git import git_diff, git_status
@@ -21,11 +22,12 @@ console = Console()
 def _setup_logging() -> None:
     dirs = ensure_runtime_dirs()
     log_file = dirs["logs"] / "codeyz.log"
-    logging.basicConfig(
-        filename=str(log_file),
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+    handler = logging.FileHandler(str(log_file), encoding="utf-8")
+    handler.setFormatter(JsonFormatter())
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.handlers.clear()
+    root.addHandler(handler)
 
 
 def _ensure_first_run_env() -> None:

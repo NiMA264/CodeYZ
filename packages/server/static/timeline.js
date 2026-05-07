@@ -40,6 +40,9 @@ let visibleRange = { start: -1, end: -1 };
 let pendingVirtualFrame = 0;
 let currentDiffFiles = [];
 let selectedDiffFile = "";
+let selectedResumeCheckpointId = "";
+let selectedResumeTargetPhase = "";
+let pendingResumeValidationToken = 0;
 const GROUP_WINDOW_MS = 12_000;
 const GROUP_LABELS = {
   test: "Test Events",
@@ -53,6 +56,10 @@ const GROUP_LABELS = {
   policy_warning: "Policy Warnings",
   policy_block: "Policy Blocks",
   policy_approval_required: "Policy Approvals",
+  resume_phase_requested: "Resume Requests",
+  resume_phase_started: "Resume Starts",
+  resume_phase_completed: "Resume Completions",
+  resume_phase_failed: "Resume Failures",
   error: "Errors",
 };
 
@@ -358,6 +365,182 @@ function renderCurrentAction(detail) {
   }
 }
 
+function renderResumePanel(detail) {
+  if (!els.resumeSummaryEl) return;
+  const resume = detail && typeof detail.resume_state === "object" ? detail.resume_state : {};
+  const rows = [
+    ["State", resume.state || "unknown"],
+    ["Candidate", resume.resume_candidate ? "yes" : "no"],
+    ["Phase", resume.resumable_phase || "unknown"],
+    ["Checkpoint", resume.latest_checkpoint_id ? String(resume.latest_checkpoint_id).slice(0, 8) : "-"],
+    ["Reason", resume.reason || "-"],
+    ["Pending approvals", Array.isArray(resume.pending_approvals) ? resume.pending_approvals.length : 0],
+  ];
+  els.resumeSummaryEl.innerHTML = "";
+  for (const [k, v] of rows) {
+    const keyEl = document.createElement("span");
+    keyEl.className = "run-metric-key";
+    keyEl.textContent = `${k}:`;
+    const valEl = document.createElement("span");
+    valEl.className = "run-metric-value";
+    valEl.textContent = String(v);
+    els.resumeSummaryEl.appendChild(keyEl);
+    els.resumeSummaryEl.appendChild(valEl);
+  }
+  renderResumeSelectors(detail, resume);
+  void refreshResumeValidationPreview(detail);
+}
+
+function populateSelectOptions(selectEl, options, selectedValue, emptyLabel) {
+  if (!selectEl) return;
+  selectEl.innerHTML = "";
+  const safeOptions = Array.isArray(options) ? options : [];
+  if (safeOptions.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = emptyLabel;
+    selectEl.appendChild(opt);
+    selectEl.disabled = true;
+    return;
+  }
+  selectEl.disabled = false;
+  for (const option of safeOptions) {
+    const opt = document.createElement("option");
+    opt.value = String(option.value || "");
+    opt.textContent = String(option.label || option.value || "-");
+    if (String(opt.value) === String(selectedValue || "")) opt.selected = true;
+    selectEl.appendChild(opt);
+  }
+}
+
+function renderResumeSelectors(detail, resume) {
+  const checkpoints = Array.isArray(detail?.checkpoints) ? detail.checkpoints : [];
+  const selectedRun = String(detail?.run_id || "");
+  const defaultCheckpoint =
+    selectedRun && state.selectedRunId === selectedRun && selectedResumeCheckpointId
+      ? selectedResumeCheckpointId
+      : String(resume.latest_checkpoint_id || "");
+  const checkpointOptions = checkpoints.map((cp) => {
+    const checkpointId = String(cp?.checkpoint_id || "");
+    const shortId = checkpointId ? checkpointId.slice(0, 8) : "-";
+    const phase = String(cp?.phase || "unknown");
+    const seq = Number(cp?.sequence || 0);
+    const reason = String(cp?.reason || cp?.current_action || "-");
+    const pendingApprovals = Array.isArray(cp?.pending_approvals) ? cp.pending_approvals.length : 0;
+    const candidate = cp?.resume_candidate ? "candidate" : "non-candidate";
+    return {
+      value: checkpointId,
+      label: `${shortId} · phase=${phase} · seq=${seq} · approvals=${pendingApprovals} · ${candidate} · ${reason}`,
+    };
+  });
+  selectedResumeCheckpointId = defaultCheckpoint;
+  populateSelectOptions(els.resumeCheckpointSelectEl, checkpointOptions, selectedResumeCheckpointId, "Keine Checkpoints");
+  if (els.resumeCheckpointSelectEl && els.resumeCheckpointSelectEl.value) {
+    selectedResumeCheckpointId = els.resumeCheckpointSelectEl.value;
+  }
+
+  const transition = resume && typeof resume.transition === "object" ? resume.transition : {};
+  const defaultTarget = transition.target_phase || resume.resumable_phase || "";
+  if (!selectedResumeTargetPhase || selectedRun !== state.selectedRunId) {
+    selectedResumeTargetPhase = String(defaultTarget || "");
+  }
+  const targetOptions = [];
+  if (defaultTarget) {
+    const source = String(transition.source_phase || resume.resumable_phase || "unknown");
+    const executor = String(transition.executor || "unknown_executor");
+    const allowed = transition.allowed === false ? "blocked" : "allowed";
+    targetOptions.push({
+      value: String(defaultTarget),
+      label: `${source} -> ${defaultTarget} · ${executor} · ${allowed}`,
+    });
+  }
+  populateSelectOptions(els.resumeTargetPhaseSelectEl, targetOptions, selectedResumeTargetPhase, "Keine Zielphase");
+  if (els.resumeTargetPhaseSelectEl && els.resumeTargetPhaseSelectEl.value) {
+    selectedResumeTargetPhase = els.resumeTargetPhaseSelectEl.value;
+  }
+}
+
+async function fetchResumeValidation(runId) {
+  const params = new URLSearchParams();
+  if (selectedResumeCheckpointId) params.set("checkpoint_id", selectedResumeCheckpointId);
+  if (selectedResumeTargetPhase) params.set("target_phase", selectedResumeTargetPhase);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const payload = await apiGet(`/task/runs/${encodeURIComponent(runId)}/resume-validation${suffix}`);
+  return payload && typeof payload.validation === "object" ? payload.validation : {};
+}
+
+function renderResumeValidation(validation) {
+  if (!els.resumeValidationPreviewEl) return;
+  const rows = [
+    ["Allowed", validation?.allowed ? "yes" : "no"],
+    ["Transition", validation?.transition || "-"],
+    ["Phase executor", validation?.phase_executor || "-"],
+    ["Attempts", `${validation?.attempts_used ?? 0}/${validation?.attempts_limit ?? 0}`],
+    ["Resume state", validation?.resume_state || "unknown"],
+    ["Policy", validation?.policy_summary || "-"],
+    ["Reasons", Array.isArray(validation?.reasons) ? validation.reasons.join(", ") || "-" : "-"],
+    ["Blocking", Array.isArray(validation?.blocking_conditions) ? validation.blocking_conditions.join(", ") || "-" : "-"],
+    ["Required actions", Array.isArray(validation?.required_actions) ? validation.required_actions.join(", ") || "-" : "-"],
+  ];
+  els.resumeValidationPreviewEl.innerHTML = "";
+  for (const [k, v] of rows) {
+    const keyEl = document.createElement("span");
+    keyEl.className = "run-metric-key";
+    keyEl.textContent = `${k}:`;
+    const valEl = document.createElement("span");
+    valEl.className = "run-metric-value";
+    valEl.textContent = String(v);
+    els.resumeValidationPreviewEl.appendChild(keyEl);
+    els.resumeValidationPreviewEl.appendChild(valEl);
+  }
+}
+
+function renderResumeBlockedExplanation(validation) {
+  if (!els.resumeBlockedExplanationEl) return;
+  const blocks = Array.isArray(validation?.blocking_conditions) ? validation.blocking_conditions : [];
+  const actions = Array.isArray(validation?.required_actions) ? validation.required_actions : [];
+  if (validation?.allowed) {
+    els.resumeBlockedExplanationEl.className = "event-group-empty";
+    els.resumeBlockedExplanationEl.textContent = "Resume erlaubt.";
+    return;
+  }
+  const items = [];
+  for (const block of blocks) items.push(`blocked: ${block}`);
+  for (const action of actions) items.push(`required: ${action}`);
+  els.resumeBlockedExplanationEl.className = "event-group-empty";
+  els.resumeBlockedExplanationEl.textContent = items.length > 0 ? items.join(" | ") : "Resume blockiert.";
+}
+
+function renderResumeValidationError(error) {
+  if (els.resumeValidationPreviewEl) {
+    els.resumeValidationPreviewEl.textContent = "Validation konnte nicht geladen werden.";
+  }
+  if (els.resumeBlockedExplanationEl) {
+    els.resumeBlockedExplanationEl.textContent = `Validation error: ${String(error?.message || error || "unknown")}`;
+  }
+  if (els.resumeRunBtn) {
+    els.resumeRunBtn.disabled = true;
+  }
+}
+
+async function refreshResumeValidationPreview(detail) {
+  const runId = String(detail?.run_id || "");
+  if (!runId) return;
+  const token = ++pendingResumeValidationToken;
+  try {
+    const validation = await fetchResumeValidation(runId);
+    if (token !== pendingResumeValidationToken) return;
+    renderResumeValidation(validation);
+    renderResumeBlockedExplanation(validation);
+    if (els.resumeRunBtn) {
+      els.resumeRunBtn.disabled = !validation.allowed;
+    }
+  } catch (error) {
+    if (token !== pendingResumeValidationToken) return;
+    renderResumeValidationError(error);
+  }
+}
+
 function renderRunMetrics(detail) {
   if (!els.runMetricsSummaryEl) return;
   const metrics = detail && typeof detail.metrics === "object" ? detail.metrics : {};
@@ -379,6 +562,10 @@ function renderRunMetrics(detail) {
     ["Checkpoints", metrics.checkpoints_created ?? "0"],
     ["Resume candidates", metrics.resume_candidates ?? "0"],
     ["Approval waitpoints", metrics.approval_waitpoints ?? "0"],
+    ["Resume phase attempts", metrics.resume_phase_attempts ?? "0"],
+    ["Resume phase failures", metrics.resume_phase_failures ?? "0"],
+    ["Resume transition rejects", metrics.resume_transition_rejections ?? "0"],
+    ["Retry limit hits", metrics.retry_limit_hits ?? "0"],
     ["Status", metrics.final_status || detail?.status || "unknown"],
     ["Profile", metrics.profile || detail?.profile || "custom"],
     ["Resume state", detail?.resume_state?.state || "unknown"],
@@ -515,11 +702,25 @@ function renderReplay(detail) {
   const normalizedEvents = normalizeReplayEvents(detail.events || []);
   renderRunMetrics(detail);
   renderCurrentAction(detail);
+  renderResumePanel(detail);
   renderReplayNavigation(normalizedEvents, detail);
   renderReplayViewer(normalizedEvents, detail);
   renderAuditTrail(normalizedEvents);
   renderDiffViewer(normalizedEvents);
   renderEventGroups(normalizedEvents);
+}
+
+async function resumeRun() {
+  if (!state.selectedRunId) return;
+  await apiPost(`/task/resume/${encodeURIComponent(state.selectedRunId)}`, {
+    checkpoint_id: selectedResumeCheckpointId || null,
+    target_phase: selectedResumeTargetPhase || null,
+  });
+  const detail = await apiGet(`/task/runs/${encodeURIComponent(state.selectedRunId)}`);
+  renderWorkflowCard(detail);
+  renderToolDecision(detail.events || []);
+  renderApprovalActions(detail.events || []);
+  renderReplay(detail);
 }
 
 function parseEventTimestampMs(event, fallbackIndex) {
@@ -603,6 +804,23 @@ async function openRun(runId) {
   renderToolDecision(detail.events || []);
   renderApprovalActions(detail.events || []);
   renderReplay(detail);
+  if (els.resumeCheckpointSelectEl) {
+    els.resumeCheckpointSelectEl.onchange = async () => {
+      selectedResumeCheckpointId = String(els.resumeCheckpointSelectEl.value || "");
+      await refreshResumeValidationPreview(detail);
+    };
+  }
+  if (els.resumeTargetPhaseSelectEl) {
+    els.resumeTargetPhaseSelectEl.onchange = async () => {
+      selectedResumeTargetPhase = String(els.resumeTargetPhaseSelectEl.value || "");
+      await refreshResumeValidationPreview(detail);
+    };
+  }
+  if (els.resumeRunBtn) {
+    els.resumeRunBtn.onclick = async () => {
+      await resumeRun();
+    };
+  }
 }
 
 async function applyApprovedPatch(eventId) {

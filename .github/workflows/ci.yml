@@ -30,6 +30,40 @@ jobs:
       - name: Run pytest
         run: pytest -q
 
+      - name: Run security tests
+        run: pytest -q tests/security
+
+      - name: Artifact hygiene
+        run: |
+          python - <<'PY'
+          import subprocess
+          import sys
+
+          tracked = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+          banned_dirs = ("node_modules/", "dist/", "build/")
+          banned = [p for p in tracked if p.startswith(banned_dirs)]
+          zips = [p for p in tracked if p.lower().endswith(".zip")]
+          large_zips = []
+          for p in zips:
+            try:
+              size = int(subprocess.check_output(["git", "cat-file", "-s", f"HEAD:{p}"], text=True).strip())
+            except Exception:
+              continue
+            if size > 5 * 1024 * 1024:
+              large_zips.append((p, size))
+          if banned or large_zips:
+            if banned:
+              print("Banned tracked artifacts:")
+              for p in banned:
+                print(" -", p)
+            if large_zips:
+              print("Large zip artifacts (>5MB):")
+              for p, size in large_zips:
+                print(f" - {p} ({size} bytes)")
+            sys.exit(1)
+          print("Artifact hygiene check passed.")
+          PY
+
   dependency-audit:
     name: Dependency Audit
     runs-on: ubuntu-latest

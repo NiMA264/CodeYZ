@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from threading import RLock
 from uuid import uuid4
 
+from packages.core.executor import run_build, run_tests
 from packages.core.persistence import atomic_write_text, file_lock
+from packages.core.policy import evaluate_constraints
 from packages.core.runtime_paths import ensure_runtime_dirs
 
 RUNS_FILE = ensure_runtime_dirs()["runs"] / "runs.jsonl"
@@ -41,6 +43,13 @@ RESUME_STATES = {
     "failed_non_resumable",
     "cancelled",
 }
+RESUME_TRANSITIONS = {
+    "approval_required": "applying",
+    "testing": "testing",
+    "patching": "patching",
+    "tool_selection": "tool_selection",
+}
+MAX_RESUME_PHASE_ATTEMPTS = 3
 
 
 def _parse_iso(ts: str | None) -> datetime | None:
@@ -181,6 +190,15 @@ def _build_run_metrics(run: dict, live: bool = False) -> dict:
     runtime_limit_hits = 0
     checkpoints_created = len(run.get("checkpoints", [])) if isinstance(run.get("checkpoints"), list) else 0
     approval_waitpoints = 0
+    resume_attempts = 0
+    successful_resumes = 0
+    rejected_resumes = 0
+    resume_validation_failures = 0
+    resumed_from_checkpoint = 0
+    resume_phase_attempts = 0
+    resume_phase_failures = 0
+    resume_transition_rejections = 0
+    retry_limit_hits = 0
     tool_usage = {"search": False, "plugins": False, "tests": False, "files": False}
 
     for event in events:
@@ -279,6 +297,28 @@ def _build_run_metrics(run: dict, live: bool = False) -> dict:
                 approval_triggers += 1
             if isinstance(data.get("constraint_result"), dict):
                 constraint_evaluations += 1
+        if event_type == "resume_requested":
+            resume_attempts += 1
+        if event_type == "resume_completed":
+            successful_resumes += 1
+            if data.get("checkpoint_id"):
+                resumed_from_checkpoint += 1
+        if event_type == "resume_rejected":
+            rejected_resumes += 1
+            validation = data.get("validation") if isinstance(data.get("validation"), dict) else {}
+            if validation.get("allowed") is False:
+                resume_validation_failures += 1
+        if event_type == "resume_phase_started":
+            resume_phase_attempts += 1
+        if event_type == "resume_phase_failed":
+            resume_phase_failures += 1
+            validation_summary = data.get("validation_summary") if isinstance(data.get("validation_summary"), dict) else {}
+            if "resume_limit_reached" in (validation_summary.get("blocking_conditions") if isinstance(validation_summary.get("blocking_conditions"), list) else []):
+                retry_limit_hits += 1
+        if event_type == "resume_phase_requested":
+            validation_summary = data.get("validation_summary") if isinstance(data.get("validation_summary"), dict) else {}
+            if validation_summary.get("allowed") is False:
+                resume_transition_rejections += 1
 
         token_input += int(data.get("estimated_input_tokens") or 0)
         token_output += int(data.get("estimated_output_tokens") or 0)
@@ -331,6 +371,15 @@ def _build_run_metrics(run: dict, live: bool = False) -> dict:
         "approval_waitpoints": approval_waitpoints,
         "resume_candidates": 1 if bool(_derive_resume_state(run).get("resume_candidate")) else 0,
         "resumable_runs": 1 if str(_derive_resume_state(run).get("state")) in {"resumable", "waiting_for_approval"} else 0,
+        "resume_attempts": resume_attempts,
+        "successful_resumes": successful_resumes,
+        "rejected_resumes": rejected_resumes,
+        "resumed_from_checkpoint": resumed_from_checkpoint,
+        "resume_validation_failures": resume_validation_failures,
+        "resume_phase_attempts": resume_phase_attempts,
+        "resume_phase_failures": resume_phase_failures,
+        "resume_transition_rejections": resume_transition_rejections,
+        "retry_limit_hits": retry_limit_hits,
     }
 
 
@@ -505,6 +554,7 @@ def create_run(
     access_level: str | None,
     profile: str | None = None,
     policy: dict | None = None,
+    request_id: str | None = None,
 ) -> str:
     run_id = uuid4().hex
     run = {
@@ -517,6 +567,7 @@ def create_run(
         "created_at": _now_iso(),
         "finished_at": None,
         "profile": _sanitize(profile or "custom"),
+        "request_id": _sanitize(request_id or ""),
         "policy": _sanitize(policy or {}),
         "phase": "created",
         "events": [],
@@ -539,6 +590,7 @@ def create_run(
             "created_at": run["created_at"],
             "finished_at": run["finished_at"],
             "profile": run["profile"],
+            "request_id": run["request_id"],
             "policy": run["policy"],
             "phase": run["phase"],
             "checkpoints": run["checkpoints"],
@@ -603,6 +655,293 @@ def create_checkpoint(run_id: str, reason: str, current_action: str | None = Non
     return checkpoint
 
 
+def validate_resume(run_id: str, checkpoint_id: str | None = None) -> dict:
+    run = get_run(run_id)
+    if run is None:
+        return {
+            "allowed": False,
+            "reasons": ["run_not_found"],
+            "blocking_conditions": ["missing_run"],
+            "checkpoint": {},
+            "resumable_phase": "unknown",
+            "required_actions": ["select_valid_run"],
+        }
+    resume_state = run.get("resume_state", {}) if isinstance(run.get("resume_state"), dict) else {}
+    checkpoints = run.get("checkpoints", []) if isinstance(run.get("checkpoints"), list) else []
+    selected = None
+    if checkpoint_id:
+        selected = next((cp for cp in checkpoints if str(cp.get("checkpoint_id", "")) == str(checkpoint_id)), None)
+    if selected is None and checkpoints:
+        selected = checkpoints[-1]
+
+    blocking_conditions: list[str] = []
+    required_actions: list[str] = []
+    reasons: list[str] = []
+    state = str(resume_state.get("state", "failed_non_resumable"))
+    if state in {"completed", "cancelled", "failed_non_resumable"}:
+        blocking_conditions.append(f"state_{state}")
+    if selected is None:
+        blocking_conditions.append("missing_checkpoint")
+        required_actions.append("select_checkpoint")
+    pending_approvals = resume_state.get("pending_approvals", []) if isinstance(resume_state.get("pending_approvals"), list) else []
+    if pending_approvals:
+        blocking_conditions.append("pending_approvals")
+        required_actions.append("apply_or_reject_pending_approval")
+
+    policy = run.get("policy", {}) if isinstance(run.get("policy"), dict) else {}
+    policy_eval = evaluate_constraints(policy=policy, metrics=run.get("metrics", {}), run_state=run, action="resume")
+    if bool(policy_eval.get("blocked")):
+        blocking_conditions.append("policy_blocked")
+        reasons.extend([str(x) for x in policy_eval.get("triggered_constraints", []) if str(x)])
+
+    allowed = len(blocking_conditions) == 0 and bool(resume_state.get("resume_candidate", False))
+    if not reasons:
+        reasons = [str(x) for x in blocking_conditions]
+    return {
+        "allowed": allowed,
+        "reasons": reasons,
+        "blocking_conditions": blocking_conditions,
+        "checkpoint": selected or {},
+        "resumable_phase": str((selected or {}).get("phase", resume_state.get("resumable_phase", "unknown"))),
+        "required_actions": sorted(set(required_actions)),
+        "resume_state": resume_state,
+        "policy_summary": policy_eval,
+    }
+
+
+def _resume_phase_attempts_for_transition(run: dict, source_phase: str, target_phase: str) -> int:
+    events = run.get("events", []) if isinstance(run.get("events"), list) else []
+    total = 0
+    for ev in events:
+        if str(ev.get("event_type", "")) != "resume_phase_started":
+            continue
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        if str(data.get("source_phase", "")) == source_phase and str(data.get("target_phase", "")) == target_phase:
+            total += 1
+    return total
+
+
+def validate_resume_transition(run_id: str, checkpoint_id: str | None = None, target_phase: str | None = None) -> dict:
+    base = validate_resume(run_id, checkpoint_id=checkpoint_id)
+    if not bool(base.get("allowed")):
+        return {
+            "allowed": False,
+            "transition": {},
+            "reasons": list(base.get("reasons", [])),
+            "blocking_conditions": list(base.get("blocking_conditions", [])),
+            "required_actions": list(base.get("required_actions", [])),
+            "checkpoint": base.get("checkpoint", {}),
+            "resumable_phase": base.get("resumable_phase", "unknown"),
+            "phase_executor": "none",
+            "attempts_used": 0,
+            "attempts_limit": MAX_RESUME_PHASE_ATTEMPTS,
+            "resume_state": base.get("resume_state", {}),
+        }
+    run = get_run(run_id) or {}
+    checkpoint = base.get("checkpoint", {}) if isinstance(base.get("checkpoint"), dict) else {}
+    source_phase = str(base.get("resumable_phase", checkpoint.get("phase", "unknown")))
+    derived_target = RESUME_TRANSITIONS.get(source_phase, "")
+    chosen_target = str(target_phase or derived_target or "")
+    reasons: list[str] = []
+    blocking_conditions: list[str] = []
+    required_actions: list[str] = []
+    if not chosen_target:
+        blocking_conditions.append("unsupported_source_phase")
+        required_actions.append("select_supported_phase")
+    if source_phase not in RESUME_TRANSITIONS:
+        blocking_conditions.append("unsupported_source_phase")
+        required_actions.append("select_supported_phase")
+    if chosen_target and derived_target and chosen_target != derived_target:
+        blocking_conditions.append("invalid_target_phase")
+        reasons.append("target_phase_not_allowed_for_source")
+    attempts_used = _resume_phase_attempts_for_transition(run, source_phase, chosen_target)
+    if attempts_used >= MAX_RESUME_PHASE_ATTEMPTS:
+        blocking_conditions.append("resume_limit_reached")
+        reasons.append("max_resume_phase_attempts_exceeded")
+    if source_phase == "approval_required":
+        pending = base.get("resume_state", {}).get("pending_approvals", []) if isinstance(base.get("resume_state"), dict) else []
+        if pending:
+            blocking_conditions.append("approval_not_resolved")
+            required_actions.append("approve_pending_patch")
+    transition = {"source_phase": source_phase, "target_phase": chosen_target}
+    return {
+        "allowed": len(blocking_conditions) == 0,
+        "transition": transition,
+        "reasons": sorted(set(list(base.get("reasons", [])) + reasons)),
+        "blocking_conditions": sorted(set(list(base.get("blocking_conditions", [])) + blocking_conditions)),
+        "required_actions": sorted(set(list(base.get("required_actions", [])) + required_actions)),
+        "checkpoint": checkpoint,
+        "resumable_phase": source_phase,
+        "phase_executor": f"resume_{source_phase}_to_{chosen_target}" if chosen_target else "none",
+        "attempts_used": attempts_used,
+        "attempts_limit": MAX_RESUME_PHASE_ATTEMPTS,
+        "resume_state": base.get("resume_state", {}),
+    }
+
+
+def execute_resume(run_id: str, checkpoint_id: str | None = None, target_phase: str | None = None) -> dict:
+    base_validation = validate_resume(run_id, checkpoint_id=checkpoint_id)
+    if "missing_run" in base_validation.get("blocking_conditions", []):
+        return {"ok": False, "run_id": run_id, "validation": base_validation}
+    transition_validation = validate_resume_transition(run_id, checkpoint_id=checkpoint_id, target_phase=target_phase)
+    checkpoint = transition_validation.get("checkpoint", {}) if isinstance(transition_validation.get("checkpoint"), dict) else {}
+    transition = transition_validation.get("transition", {}) if isinstance(transition_validation.get("transition"), dict) else {}
+    source_phase = str(transition.get("source_phase", transition_validation.get("resumable_phase", "unknown")))
+    target = str(transition.get("target_phase", ""))
+
+    add_event(
+        run_id,
+        "resume_requested",
+        "Resume requested",
+        {
+            "checkpoint_id": str(checkpoint.get("checkpoint_id", "")),
+            "validation": base_validation,
+            "reason": "explicit_user_request",
+        },
+        agent_role="reviewer",
+    )
+    add_event(
+        run_id,
+        "resume_phase_requested",
+        "Resume phase requested",
+        {
+            "source_phase": source_phase,
+            "target_phase": target,
+            "checkpoint_id": str(checkpoint.get("checkpoint_id", "")),
+            "validation_summary": transition_validation,
+            "reason": "explicit_user_request",
+        },
+        agent_role="reviewer",
+    )
+
+    if not bool(transition_validation.get("allowed")):
+        event = add_event(
+            run_id,
+            "resume_rejected",
+            "Resume rejected",
+            {
+                "checkpoint_id": str(checkpoint.get("checkpoint_id", "")),
+                "validation": transition_validation,
+                "reason": "validation_failed",
+            },
+            agent_role="reviewer",
+        )
+        add_event(
+            run_id,
+            "resume_phase_failed",
+            "Resume phase failed",
+            {
+                "source_phase": source_phase,
+                "target_phase": target,
+                "checkpoint_id": str(checkpoint.get("checkpoint_id", "")),
+                "validation_summary": transition_validation,
+                "reason": "transition_rejected",
+            },
+            agent_role="reviewer",
+        )
+        if "resume_limit_reached" in transition_validation.get("blocking_conditions", []):
+            add_event(
+                run_id,
+                "policy_block",
+                "Resume limit reached",
+                {"reason": "resume_limit_reached", "transition": transition, "constraint_result": transition_validation},
+                agent_role="reviewer",
+            )
+        return {"ok": False, "run_id": run_id, "validation": transition_validation, "event": event}
+
+    set_run_phase(run_id, target or source_phase)
+    add_event(
+        run_id,
+        "resume_started",
+        "Resume started",
+        {
+            "checkpoint_id": str(checkpoint.get("checkpoint_id", "")),
+            "phase": source_phase,
+            "validation": {"allowed": True, "reasons": transition_validation.get("reasons", [])},
+            "policy_summary": base_validation.get("policy_summary", {}),
+            "reason": "explicit_user_request",
+        },
+        agent_role="reviewer",
+    )
+    add_event(
+        run_id,
+        "resume_phase_started",
+        "Resume phase started",
+        {
+            "source_phase": source_phase,
+            "target_phase": target,
+            "checkpoint_id": str(checkpoint.get("checkpoint_id", "")),
+            "validation_summary": transition_validation,
+            "reason": "transition_allowed",
+        },
+        agent_role="reviewer",
+    )
+    create_checkpoint(run_id, reason="resume_phase_started", current_action=f"{source_phase}->{target}")
+
+    phase_result: dict = {"ok": True, "detail": "noop"}
+    try:
+        if source_phase == "testing":
+            build_result = run_build(access_level=str((get_run(run_id) or {}).get("access_level", "")) or None)
+            test_result = run_tests(access_level=str((get_run(run_id) or {}).get("access_level", "")) or None)
+            add_event(run_id, "build", "Resume testing: build rerun", build_result, agent_role="tester")
+            add_event(run_id, "test", "Resume testing: tests rerun", test_result, agent_role="tester")
+            phase_result = {"ok": bool(test_result.get("ok")), "build": build_result, "tests": test_result}
+        elif source_phase == "approval_required":
+            phase_result = {"ok": True, "detail": "approval_resolved_context_restored"}
+        elif source_phase == "patching":
+            phase_result = {"ok": True, "detail": "patching_context_restored"}
+        elif source_phase == "tool_selection":
+            phase_result = {"ok": True, "detail": "tool_selection_context_restored"}
+    except Exception as exc:
+        phase_result = {"ok": False, "error": str(exc)}
+
+    if not bool(phase_result.get("ok", False)):
+        add_event(
+            run_id,
+            "resume_phase_failed",
+            "Resume phase failed",
+            {
+                "source_phase": source_phase,
+                "target_phase": target,
+                "checkpoint_id": str(checkpoint.get("checkpoint_id", "")),
+                "validation_summary": transition_validation,
+                "phase_result": phase_result,
+                "reason": "phase_executor_failed",
+            },
+            agent_role="reviewer",
+        )
+        return {"ok": False, "run_id": run_id, "validation": transition_validation, "phase_result": phase_result}
+
+    add_event(
+        run_id,
+        "resume_phase_completed",
+        "Resume phase completed",
+        {
+            "source_phase": source_phase,
+            "target_phase": target,
+            "checkpoint_id": str(checkpoint.get("checkpoint_id", "")),
+            "validation_summary": {"allowed": True, "reasons": transition_validation.get("reasons", [])},
+            "phase_result": phase_result,
+            "reason": "phase_executor_completed",
+        },
+        agent_role="reviewer",
+    )
+    create_checkpoint(run_id, reason="resume_phase_completed", current_action=f"{source_phase}->{target}:completed")
+    event = add_event(
+        run_id,
+        "resume_completed",
+        "Resume context restored",
+        {
+            "checkpoint_id": str(checkpoint.get("checkpoint_id", "")),
+            "phase": source_phase,
+            "resume_sequence": int(checkpoint.get("sequence", 0) or 0),
+            "reason": "resume_ready_for_next_action",
+        },
+        agent_role="reviewer",
+    )
+    return {"ok": True, "run_id": run_id, "validation": transition_validation, "phase_result": phase_result, "event": event, "run": get_run(run_id)}
+
+
 def finish_run(run_id: str, status: str, summary: str | None = None) -> dict:
     with _LOCK:
         run = _RUNS.get(run_id)
@@ -655,6 +994,7 @@ def list_runs() -> list[dict]:
                 "finished_at": _RUNS[rid]["finished_at"],
                 "events_count": len(_RUNS[rid]["events"]),
                 "policy": _RUNS[rid].get("policy", {}),
+                "request_id": _RUNS[rid].get("request_id", ""),
                 "phase": _resolve_phase(_RUNS[rid]),
                 "metrics": _metrics_for(_RUNS[rid]),
                 "resume_state": _derive_resume_state(_RUNS[rid]),
@@ -679,6 +1019,7 @@ def get_run(run_id: str) -> dict | None:
             "created_at": run["created_at"],
             "finished_at": run["finished_at"],
             "profile": run.get("profile", "custom"),
+            "request_id": run.get("request_id", ""),
             "policy": run.get("policy", {}),
             "phase": _resolve_phase(run),
             "metrics": _build_run_metrics(run, live=(str(run.get("status", "")) == "running")),
@@ -799,6 +1140,7 @@ def _load_runs_unlocked() -> None:
                 "created_at": str(record.get("created_at", record.get("ts", _now_iso()))),
                 "finished_at": record.get("finished_at"),
                 "profile": _sanitize(str(record.get("profile", "custom") or "custom")),
+                "request_id": _sanitize(str(record.get("request_id", "") or "")),
                 "policy": _sanitize(record.get("policy", {}) if isinstance(record.get("policy"), dict) else {}),
                 "phase": str(record.get("phase", "created") or "created"),
                 "events": [],
@@ -935,6 +1277,7 @@ def compact_runs_storage() -> None:
                         "created_at": run.get("created_at", _now_iso()),
                         "finished_at": run.get("finished_at"),
                         "profile": run.get("profile", "custom"),
+                        "request_id": run.get("request_id", ""),
                         "policy": run.get("policy", {}) if isinstance(run.get("policy"), dict) else {},
                         "phase": _resolve_phase(run),
                         "checkpoints": run.get("checkpoints", []) if isinstance(run.get("checkpoints"), list) else [],

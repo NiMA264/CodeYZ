@@ -77,6 +77,25 @@
               <div id="current-action-summary" class="run-metrics-summary">Kein aktiver Run.</div>
             </section>
             <section class="panel">
+              <h2>Resume</h2>
+              <div id="resume-summary" class="run-metrics-summary">Resume nicht geprüft.</div>
+              <div class="resume-controls">
+                <label class="settings-item">
+                  <span>Checkpoint</span>
+                  <select id="resume-checkpoint-select" class="pill"></select>
+                </label>
+                <label class="settings-item">
+                  <span>Target Phase</span>
+                  <select id="resume-target-phase-select" class="pill"></select>
+                </label>
+              </div>
+              <div id="resume-validation-preview" class="run-metrics-summary">Validation nicht verfügbar.</div>
+              <div id="resume-blocked-explanation" class="event-group-empty">Keine Blocker.</div>
+              <div class="row">
+                <button id="resume-run-btn" type="button" class="run-item">Resume Run</button>
+              </div>
+            </section>
+            <section class="panel">
               <h2>Replay Navigation</h2>
               <div id="replay-nav-summary" class="run-metrics-summary">Keine Replay-Daten.</div>
             </section>

@@ -1727,7 +1727,6 @@ export function initUi() {
     updateProfileUi("custom");
     syncProfileStateFromCurrentSettings();
   }
-  refreshPolicySummary(getStored(PROFILE_KEY, "custom"));
   addMessage("assistant", "CodeYZ UI bereit.");
   if (prefs.session?.lastRunId) showToast("Session restored");
   if (!prefs.session?.lastRunId) scrollChatToBottom();

@@ -17,6 +17,7 @@ def test_api_error_format_for_forbidden_task_auto(monkeypatch) -> None:
     assert data["code"] == "autonomous_access_denied"
     assert "message" in data
     assert "hint" in data
+    assert data.get("request_id")
 
 
 def test_api_error_format_for_chat_validation(monkeypatch) -> None:
@@ -33,6 +34,7 @@ def test_api_error_format_for_chat_validation(monkeypatch) -> None:
     assert data["code"] == "unsupported_model"
     assert "message" in data
     assert "hint" in data
+    assert data.get("request_id")
 
 
 def test_api_error_code_for_plugin_not_found(monkeypatch) -> None:
@@ -47,3 +49,4 @@ def test_api_error_code_for_plugin_not_found(monkeypatch) -> None:
     data = response.json()
     assert data["ok"] is False
     assert data["code"] == "plugin_not_found"
+    assert data.get("request_id")

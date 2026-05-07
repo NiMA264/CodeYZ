@@ -88,6 +88,11 @@ User config and runtime files are stored in:
 - `sessions.json`
 - `automations.json`
 
+Model/config defaults:
+
+- Default model resolution is centralized in `packages/core/settings.py`
+- Precedence: `CODEYZ_MODEL` -> legacy `MODEL` -> `gpt-5.4-mini`
+
 ## Features
 
 - CLI + setup diagnostics
@@ -97,6 +102,7 @@ User config and runtime files are stored in:
 - Context pinning and selected-file context
 - Autonomous run timeline with tool decisions
 - Safe shell + permission model
+- Request correlation id (`x-request-id`) in API responses and error payloads
 
 ## Security Model
 
@@ -105,6 +111,9 @@ User config and runtime files are stored in:
 - Blocked paths: `.env`, `.venv`, `.git`, `node_modules`, outside workspace
 - No auto-commit/push/deploy
 - OpenAI key only via env/local secret
+- Path boundaries are validated with canonical `Path.resolve()` checks (no prefix-based boundary checks)
+- Shell execution runs with `shell=False`, command allowlist (`pytest`, `ruff`, `python`, `git`), and injection-token blocking
+- Optional plugin integrity enforcement via SHA256 allowlist (`CODEYZ_TRUSTED_PLUGIN_HASHES_FILE`)
 
 ## Fehlerbehandlung
 
@@ -113,6 +122,10 @@ User config and runtime files are stored in:
 - Plugin error: check plugin panel, disable/enable plugin
 - Budget exceeded: raise budget or split task
 - API error codes: see `docs/api-error-codes.md`
+
+## Test Runtime Isolation
+
+- Tests force `CODEYZ_RUNTIME_ROOT` to a workspace-local directory (`tests/conftest.py`), so no runtime state is written to user profile directories.
 
 ## UI Smoke-Test
 

@@ -1,15 +1,13 @@
-﻿import os
-
-from dotenv import load_dotenv
+﻿from dotenv import load_dotenv
 from openai import OpenAI
 
 from packages.core.runtime_paths import get_env_file_path
+from packages.core.settings import ALLOWED_MODELS, get_default_model, get_openai_api_key
 
 load_dotenv()
 load_dotenv(dotenv_path=get_env_file_path(), override=False)
 
-DEFAULT_MODEL = os.getenv("MODEL", "gpt-5.4-mini")
-ALLOWED_MODELS = {"gpt-5.4-mini", "gpt-5.4", "gpt-5.5"}
+DEFAULT_MODEL = get_default_model()
 
 BASE_SYSTEM = """
 You are CodeYZ, a local coding agent.
@@ -38,7 +36,7 @@ ACCESS_HINTS = {
 
 
 def _client() -> OpenAI:
-    return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return OpenAI(api_key=get_openai_api_key())
 
 
 def ask(

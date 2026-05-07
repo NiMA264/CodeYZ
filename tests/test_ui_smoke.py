@@ -46,6 +46,12 @@ def test_ui_route_and_module_wiring() -> None:
     assert 'id="run-replay-viewer"' in html
     assert 'id="run-audit-trail"' in html
     assert 'id="replay-nav-summary"' in html
+    assert 'id="resume-summary"' in html
+    assert 'id="resume-checkpoint-select"' in html
+    assert 'id="resume-target-phase-select"' in html
+    assert 'id="resume-validation-preview"' in html
+    assert 'id="resume-blocked-explanation"' in html
+    assert 'id="resume-run-btn"' in html
 
 
 @pytest.mark.skipif(
@@ -120,6 +126,12 @@ def test_ui_initializes_without_browser_errors() -> None:
             page.wait_for_selector("#run-replay-viewer")
             page.wait_for_selector("#run-audit-trail")
             page.wait_for_selector("#replay-nav-summary")
+            page.wait_for_selector("#resume-summary")
+            page.wait_for_selector("#resume-checkpoint-select")
+            page.wait_for_selector("#resume-target-phase-select")
+            page.wait_for_selector("#resume-validation-preview")
+            page.wait_for_selector("#resume-blocked-explanation")
+            page.wait_for_selector("#resume-run-btn")
             browser.close()
 
         assert not page_errors, f"browser page errors: {page_errors}"

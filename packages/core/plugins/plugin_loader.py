@@ -2,27 +2,61 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
+import os
+import hashlib
 from pathlib import Path
 from typing import Any
 
+from packages.core.path_security import ensure_no_blocked_parts, ensure_within_root
 from packages.core.plugins.plugin_permissions import validate_plugin_permissions
 from packages.core.plugins.plugin_registry import register_plugin
 
 REQUIRED_FIELDS = {"name", "description", "version", "permissions", "entry", "functions"}
 BLOCKED_NAMES = {".env", ".env.local", ".env.production"}
 BLOCKED_PARTS = {".git", ".venv", "node_modules", "__pycache__", "dist", "build"}
+TRUSTED_HASHES_ENV = "CODEYZ_TRUSTED_PLUGIN_HASHES_FILE"
+DEFAULT_TRUSTED_HASH_FILE = "trusted_plugins.json"
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_plugin_path(base: Path, target: Path) -> Path:
-    resolved_base = base.resolve()
-    resolved_target = target.resolve()
-    if not str(resolved_target).startswith(str(resolved_base)):
-        raise ValueError("Plugin path outside plugin root")
+    resolved_target = ensure_within_root(target, base)
     if resolved_target.name in BLOCKED_NAMES:
         raise ValueError("Blocked file")
-    if any(part in BLOCKED_PARTS for part in resolved_target.parts):
-        raise ValueError("Blocked directory")
+    ensure_no_blocked_parts(resolved_target, BLOCKED_PARTS)
     return resolved_target
+
+
+def _trusted_hashes_path(root: Path) -> Path:
+    explicit = os.getenv(TRUSTED_HASHES_ENV)
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    return root / DEFAULT_TRUSTED_HASH_FILE
+
+
+def _load_trusted_hashes(root: Path) -> dict[str, str]:
+    target = _trusted_hashes_path(root)
+    if not target.exists():
+        return {}
+    data = json.loads(target.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Trusted plugin hashes file must contain a JSON object")
+    cleaned: dict[str, str] = {}
+    for name, digest in data.items():
+        if not isinstance(name, str) or not isinstance(digest, str):
+            continue
+        cleaned[name] = digest.strip().lower()
+    return cleaned
+
+
+def _hash_plugin_files(plugin_dir: Path, manifest_path: Path, entry_path: Path) -> str:
+    digest = hashlib.sha256()
+    digest.update(manifest_path.read_bytes())
+    digest.update(entry_path.read_bytes())
+    digest.update(plugin_dir.name.encode("utf-8"))
+    return digest.hexdigest()
 
 
 def _load_manifest(path: Path) -> dict[str, Any]:
@@ -57,6 +91,9 @@ def load_plugins(directory: str | Path) -> list[dict[str, Any]]:
     root = Path(directory).resolve()
     if not root.exists() or not root.is_dir():
         return []
+    trusted_hashes_file = _trusted_hashes_path(root)
+    trusted_hashes = _load_trusted_hashes(root)
+    enforce_hashes = trusted_hashes_file.exists()
 
     loaded: list[dict[str, Any]] = []
     for plugin_dir in sorted([p for p in root.iterdir() if p.is_dir()]):
@@ -66,6 +103,16 @@ def load_plugins(directory: str | Path) -> list[dict[str, Any]]:
             if not manifest_path.exists():
                 continue
             manifest = _load_manifest(manifest_path)
+            entry_path = _safe_plugin_path(safe_dir, safe_dir / str(manifest["entry"]))
+            plugin_hash = _hash_plugin_files(safe_dir, manifest_path, entry_path)
+            expected_hash = trusted_hashes.get(str(manifest["name"]))
+            if enforce_hashes:
+                if not expected_hash:
+                    logger.warning("Plugin rejected: missing trusted hash for %s", manifest["name"])
+                    continue
+                if expected_hash != plugin_hash:
+                    logger.warning("Plugin rejected: hash mismatch for %s", manifest["name"])
+                    continue
             handler = _load_handler(safe_dir, str(manifest["entry"]))
             plugin = {
                 "name": str(manifest["name"]),
@@ -79,7 +126,9 @@ def load_plugins(directory: str | Path) -> list[dict[str, Any]]:
             }
             register_plugin(plugin)
             loaded.append({k: v for k, v in plugin.items() if k != "handler"})
+            logger.info("Plugin loaded: %s", manifest["name"])
         except Exception:
+            logger.exception("Plugin load failed for directory: %s", plugin_dir.name)
             continue
 
     return loaded

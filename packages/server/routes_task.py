@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, status
+﻿from fastapi import APIRouter, Request, status
 from pydantic import BaseModel
 
 from packages.core.agent_loop import run_autonomous_task
@@ -17,6 +17,7 @@ from packages.core.task_runs import (
     list_runs,
     mark_approval_event,
     set_run_phase,
+    execute_resume,
 )
 from packages.server.errors import raise_api_error
 
@@ -33,13 +34,18 @@ class TaskRequest(BaseModel):
     role_models: dict[str, str] | None = None
 
 
+class ResumeRequest(BaseModel):
+    checkpoint_id: str | None = None
+    target_phase: str | None = None
+
+
 @router.post("")
 def task(payload: TaskRequest) -> dict[str, str]:
     return {"result": run_task(payload.task)}
 
 
 @router.post("/auto")
-def task_auto(payload: TaskRequest) -> dict:
+def task_auto(payload: TaskRequest, request: Request) -> dict:
     if payload.role_models:
         try:
             set_role_models(payload.role_models)
@@ -60,6 +66,7 @@ def task_auto(payload: TaskRequest) -> dict:
         profile=payload.profile,
         use_multi_agent=bool(payload.multi_agent),
         max_cost_usd=payload.max_cost_usd,
+        request_id=str(getattr(request.state, "request_id", "")),
     )
 
 
@@ -79,6 +86,36 @@ def task_run_by_id(run_id: str) -> dict:
     if run is None:
         raise_api_error(404, "run_not_found", "Run not found", "List runs via GET /task/runs first.")
     return run
+
+
+@router.get("/runs/{run_id}/resume-validation")
+def task_resume_validation(run_id: str, checkpoint_id: str | None = None, target_phase: str | None = None) -> dict:
+    from packages.core.task_runs import validate_resume_transition
+
+    validation = validate_resume_transition(run_id, checkpoint_id=checkpoint_id, target_phase=target_phase)
+    if "missing_run" in validation.get("blocking_conditions", []):
+        raise_api_error(404, "run_not_found", "Run not found", "List runs via GET /task/runs first.")
+    return {"run_id": run_id, "validation": validation}
+
+
+@router.post("/resume/{run_id}")
+def task_resume(run_id: str, payload: ResumeRequest | None = None) -> dict:
+    result = execute_resume(
+        run_id,
+        checkpoint_id=(payload.checkpoint_id if payload else None),
+        target_phase=(payload.target_phase if payload else None),
+    )
+    validation = result.get("validation", {})
+    if "missing_run" in validation.get("blocking_conditions", []):
+        raise_api_error(404, "run_not_found", "Run not found", "List runs via GET /task/runs first.")
+    if not result.get("ok"):
+        raise_api_error(
+            409,
+            "resume_rejected",
+            "Run resume was rejected by validation.",
+            f"Blocking conditions: {', '.join(validation.get('blocking_conditions', [])) or 'unknown'}",
+        )
+    return result
 
 
 @router.post("/runs/{run_id}/approve-patch/{event_id}")

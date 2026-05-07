@@ -1,12 +1,11 @@
-﻿import os
+﻿from openai import OpenAI
 
-from openai import OpenAI
-
+from packages.core.settings import get_default_model, get_openai_api_key
 from packages.tools.files import list_files
 from packages.tools.git import git_diff, git_status
 from packages.tools.shell import run_shell
 
-MODEL = os.getenv("CODEYZ_MODEL", "gpt-5.4-mini")
+MODEL = get_default_model()
 
 SYSTEM = """
 You are CodeYZ, a local coding agent.
@@ -23,7 +22,7 @@ Rules:
 
 
 def _client() -> OpenAI:
-    return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return OpenAI(api_key=get_openai_api_key())
 
 
 def _summarize_files() -> str:

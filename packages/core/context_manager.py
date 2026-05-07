@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from packages.core.indexer import search_files
+from packages.core.path_security import ensure_no_blocked_parts, ensure_within_root
 from packages.core.project_paths import get_current_project
 from packages.tools.files import BLOCKED_DIRS, BLOCKED_NAMES
 
@@ -27,13 +28,10 @@ def _validate_relative_path(path: str) -> str:
         raise ValueError("Invalid file path")
     if Path(rel).name in BLOCKED_NAMES:
         raise ValueError("Blocked secret file")
-    if any(part in BLOCKED_DIRS for part in Path(rel).parts):
-        raise ValueError("Blocked directory")
+    ensure_no_blocked_parts(Path(rel), BLOCKED_DIRS)
 
     root = Path(get_current_project()).resolve()
-    target = (root / rel).resolve()
-    if not str(target).startswith(str(root)):
-        raise ValueError("Path outside current workspace")
+    target = ensure_within_root(root / rel, root)
     if not target.exists() or not target.is_file():
         raise ValueError("File not found")
     return rel
