@@ -51,6 +51,7 @@ def disable_plugin(name: str) -> None:
 
 def call_plugin(name: str, input_data: dict[str, Any] | None = None, access_level: str | None = None) -> Any:
     from packages.core.plugins.plugin_permissions import enforce_plugin_permissions
+    from packages.core.plugins.subprocess_exec import execute_plugin_subprocess
 
     plugin = _REGISTRY.get(name)
     if plugin is None:
@@ -64,4 +65,6 @@ def call_plugin(name: str, input_data: dict[str, Any] | None = None, access_leve
     if not isinstance(permissions, list):
         permissions = []
     enforce_plugin_permissions([str(p) for p in permissions], access_level)
+    if str(plugin.get("execution_mode", "inprocess")) == "subprocess":
+        return execute_plugin_subprocess(plugin, input_data or {})
     return handler(input_data or {})

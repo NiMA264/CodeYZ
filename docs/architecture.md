@@ -18,3 +18,5 @@
 3. File/shell/plugin actions are guarded by access-level checks and path/security helpers.
 4. Events, checkpoints, and run metrics are persisted in runtime storage.
 5. FastAPI middleware attaches `request_id` and propagates it into API error payloads and autonomous task run metadata.
+6. Autonomous `/task/auto` runs are queued in a local background worker (`packages/core/job_queue.py`) so HTTP requests return quickly with `run_id`.
+7. Job lifecycle states are persisted as task-run events (`job_state`: queued/running/succeeded/failed/cancelled).

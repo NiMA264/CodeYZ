@@ -28,7 +28,10 @@ class PluginRunRequest(BaseModel):
 
 @router.get("")
 def get_plugins() -> dict[str, list[dict]]:
-    load_plugins(PLUGIN_ROOT)
+    try:
+        load_plugins(PLUGIN_ROOT)
+    except ValueError as exc:
+        raise_api_error(400, "plugin_config_invalid", str(exc), "Fix trusted plugin hash config JSON and retry.")
     return {"plugins": list_plugins()}
 
 

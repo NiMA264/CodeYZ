@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from packages.core.runtime_paths import get_env_file_path
+from packages.core.runtime_paths import ensure_runtime_dirs, get_env_file_path
 
 
 def _status(ok: bool, label: str, detail: str = "") -> str:
@@ -31,7 +31,13 @@ def check_environment() -> list[str]:
     lines.append(_status(env_ok, ".env vorhanden", f"local={local_env.exists()} appdata={app_env.exists()}"))
 
     key_ok = bool(os.getenv("OPENAI_API_KEY"))
-    lines.append(_status(key_ok, "OPENAI_API_KEY gesetzt"))
+    lines.append(_status(key_ok, "OPENAI_API_KEY gesetzt", "Setzen via Umgebungsvariable oder %APPDATA%\\CodeYZ\\.env"))
+
+    try:
+        runtime_dirs = ensure_runtime_dirs()
+        lines.append(_status(True, "Runtime root schreibbar", str(runtime_dirs["root"])))
+    except Exception as exc:
+        lines.append(_status(False, "Runtime root schreibbar", f"Fehler: {exc}"))
 
     venv_ok = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
     lines.append(_status(venv_ok, "Virtuelle Umgebung aktiv", sys.prefix))

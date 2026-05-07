@@ -64,6 +64,27 @@ If no API key is configured, CodeYZ prompts once and stores it in:
 
 `%APPDATA%\CodeYZ\.env`
 
+## Beta Install (Local)
+
+```bash
+git clone <repo-url>
+cd CodeYZ
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -e .[dev]
+python scripts/release_check.py
+codeyz setup
+codeyz server
+```
+
+For trusted plugin mode, set `CODEYZ_TRUSTED_PLUGIN_HASHES_FILE` to a JSON file:
+
+```json
+{
+  "example_plugin": "0123456789abcdef..."
+}
+```
+
 ## Commands
 
 - `codeyz setup` - environment checks
@@ -103,6 +124,8 @@ Model/config defaults:
 - Autonomous run timeline with tool decisions
 - Safe shell + permission model
 - Request correlation id (`x-request-id`) in API responses and error payloads
+- Background autonomous job queue for non-blocking `/task/auto` execution
+- Cooperative cancellation endpoint for queued/running autonomous jobs (`POST /task/cancel/{run_id}`)
 
 ## Security Model
 

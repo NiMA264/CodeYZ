@@ -1,4 +1,4 @@
-from packages.core.plugins.plugin_loader import load_plugins
+from packages.core.plugins.plugin_loader import get_last_plugin_load_errors, load_plugins
 from packages.core.plugins.plugin_permissions import (
     ALLOWED_PLUGIN_SCOPES,
     enforce_plugin_permissions,
@@ -22,6 +22,7 @@ __all__ = [
     "get_plugin",
     "list_plugins",
     "load_plugins",
+    "get_last_plugin_load_errors",
     "register_plugin",
     "validate_plugin_permissions",
 ]

@@ -42,6 +42,13 @@ def _sanitize(text: str) -> str:
     return out
 
 
+_SYMBOL_PATTERN = re.compile(r"\b(?:def|class|function|const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _extract_symbols(text: str) -> list[str]:
+    return [m.group(1) for m in _SYMBOL_PATTERN.finditer(text or "")][:50]
+
+
 def _ensure_within_current_workspace(root: Path) -> None:
     current = Path(get_current_project()).resolve()
     target = Path(ensure_allowed_path(str(root))).resolve()
@@ -78,8 +85,10 @@ def build_index(root_path: str) -> dict:
                 "path": rel,
                 "filename": file_path.name,
                 "content": content,
+                "symbols": _extract_symbols(text),
                 "tokens_estimate": _estimate_tokens(content),
                 "size_bytes": size,
+                "modified_ts": float(file_path.stat().st_mtime),
             }
         )
 

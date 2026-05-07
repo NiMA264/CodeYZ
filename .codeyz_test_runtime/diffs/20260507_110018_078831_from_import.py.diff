@@ -1,0 +1,8 @@
+--- a/from_import.py
++++ b/from_import.py
+@@ -1,4 +1,4 @@
+-from os import path
++from os import path, getenv
+ 
+ def run():
+     return path.join('a', 'b')

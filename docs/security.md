@@ -22,6 +22,7 @@
   - plugin missing hash entry -> rejected
   - hash mismatch -> rejected
   - hash match -> loaded
+- When trusted hashes are configured, plugins default to subprocess execution mode (`shell=False`) with timeout and JSON-only I/O validation.
 
 ## Runtime Isolation in Tests
 

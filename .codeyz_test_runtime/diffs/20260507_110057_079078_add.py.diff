@@ -1,0 +1,8 @@
+--- a/add.py
++++ b/add.py
+@@ -1,2 +1,5 @@
+ def x():
+     return 1
++
++def y():
++    return 2

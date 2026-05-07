@@ -62,3 +62,16 @@ def test_plugin_api_run(monkeypatch) -> None:
     )
     assert res.status_code == 200
     assert res.json()["result"]["result"] == "ok:api"
+
+
+def test_plugins_endpoint_returns_useful_error_for_malformed_hash_config(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CODEYZ_LOCAL_TOKEN", "token123")
+    bad = tmp_path / "bad_hashes.json"
+    bad.write_text("[not-an-object]", encoding="utf-8")
+    monkeypatch.setenv("CODEYZ_TRUSTED_PLUGIN_HASHES_FILE", str(bad))
+    client = TestClient(app)
+    res = client.get("/plugins", headers={"x-api-key": "token123"})
+    assert res.status_code == 400
+    payload = res.json()
+    assert payload["code"] == "plugin_config_invalid"
+    assert "trusted plugin hash config" in payload["hint"].lower() or "hash" in payload["hint"].lower()

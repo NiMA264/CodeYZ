@@ -93,7 +93,13 @@ def server(open_browser: bool = typer.Option(False, "--open-browser", help="Open
 
     if open_browser:
         webbrowser.open("http://127.0.0.1:8765/ui/")
-    uvicorn.run(fastapi_app, host="127.0.0.1", port=8765)
+    try:
+        uvicorn.run(fastapi_app, host="127.0.0.1", port=8765)
+    except OSError as exc:
+        if "10048" in str(exc) or "address already in use" in str(exc).lower():
+            console.print("Port 8765 ist bereits belegt. Lösung: laufenden Prozess beenden oder anderen Port konfigurieren.", style="red")
+            return
+        raise
 
 
 @app.command("chat")

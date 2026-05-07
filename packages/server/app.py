@@ -22,10 +22,11 @@ from packages.core.context_manager import (
 )
 from packages.core.context_policy import should_attach_code_context
 from packages.core.indexer import build_index, index_status, search_files
+from packages.core.job_queue import shutdown_job_queue
 from packages.core.logging_utils import log_structured
 from packages.core.permissions import READ_ONLY
 from packages.core.path_security import ensure_no_blocked_parts, ensure_within_root
-from packages.core.plugins import list_plugins, load_plugins, register_plugin
+from packages.core.plugins import get_last_plugin_load_errors, list_plugins, load_plugins, register_plugin
 from packages.core.project_paths import get_current_project
 from packages.core.sessions import add_message, create_session
 from packages.core.sessions import initialize_sessions_storage
@@ -46,6 +47,7 @@ async def lifespan(_app: FastAPI):
     initialize_automations_storage()
     initialize_task_runs_storage()
     yield
+    shutdown_job_queue()
 
 
 app = FastAPI(title="CodeYZ Local Server", version="0.3.0", lifespan=lifespan)
@@ -194,7 +196,17 @@ register_plugin(
         "handler": _ping_handler,
     }
 )
-load_plugins(PLUGIN_DIR)
+try:
+    load_plugins(PLUGIN_DIR)
+except ValueError as exc:
+    log_structured(
+        logger,
+        logging.WARNING,
+        "plugin_startup_config_invalid",
+        component="api",
+        code="plugin_config_invalid",
+        error=str(exc),
+    )
 try:
     build_index(get_current_project())
 except Exception:
@@ -238,8 +250,10 @@ def health() -> dict:
     return {
         "status": "ok",
         "openai": openai_status,
+        "openai_hint": "Set OPENAI_API_KEY for model calls" if openai_status != "ok" else "",
         "index": index_flag,
         "plugins": len(list_plugins()),
+        "plugin_errors": get_last_plugin_load_errors()[:10],
         "workspace": get_current_project(),
         "version": version,
     }

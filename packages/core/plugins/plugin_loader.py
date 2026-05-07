@@ -19,6 +19,7 @@ TRUSTED_HASHES_ENV = "CODEYZ_TRUSTED_PLUGIN_HASHES_FILE"
 DEFAULT_TRUSTED_HASH_FILE = "trusted_plugins.json"
 
 logger = logging.getLogger(__name__)
+_LAST_PLUGIN_LOAD_ERRORS: list[str] = []
 
 
 def _safe_plugin_path(base: Path, target: Path) -> Path:
@@ -88,11 +89,18 @@ def _load_handler(plugin_dir: Path, entry: str):
 
 
 def load_plugins(directory: str | Path) -> list[dict[str, Any]]:
+    _LAST_PLUGIN_LOAD_ERRORS.clear()
     root = Path(directory).resolve()
     if not root.exists() or not root.is_dir():
         return []
     trusted_hashes_file = _trusted_hashes_path(root)
-    trusted_hashes = _load_trusted_hashes(root)
+    try:
+        trusted_hashes = _load_trusted_hashes(root)
+    except ValueError as exc:
+        message = f"Plugin trust config invalid: {exc}"
+        _LAST_PLUGIN_LOAD_ERRORS.append(message)
+        logger.error(message)
+        raise
     enforce_hashes = trusted_hashes_file.exists()
 
     loaded: list[dict[str, Any]] = []
@@ -109,9 +117,11 @@ def load_plugins(directory: str | Path) -> list[dict[str, Any]]:
             if enforce_hashes:
                 if not expected_hash:
                     logger.warning("Plugin rejected: missing trusted hash for %s", manifest["name"])
+                    _LAST_PLUGIN_LOAD_ERRORS.append(f"Plugin rejected (missing hash): {manifest['name']}")
                     continue
                 if expected_hash != plugin_hash:
                     logger.warning("Plugin rejected: hash mismatch for %s", manifest["name"])
+                    _LAST_PLUGIN_LOAD_ERRORS.append(f"Plugin rejected (hash mismatch): {manifest['name']}")
                     continue
             handler = _load_handler(safe_dir, str(manifest["entry"]))
             plugin = {
@@ -121,6 +131,9 @@ def load_plugins(directory: str | Path) -> list[dict[str, Any]]:
                 "permissions": manifest["permissions"],
                 "functions": manifest["functions"],
                 "entry": str(manifest["entry"]),
+                "entry_path": str(entry_path),
+                "plugin_dir": str(safe_dir),
+                "execution_mode": "subprocess" if enforce_hashes else "inprocess",
                 "enabled": True,
                 "handler": handler,
             }
@@ -129,6 +142,11 @@ def load_plugins(directory: str | Path) -> list[dict[str, Any]]:
             logger.info("Plugin loaded: %s", manifest["name"])
         except Exception:
             logger.exception("Plugin load failed for directory: %s", plugin_dir.name)
+            _LAST_PLUGIN_LOAD_ERRORS.append(f"Plugin load failed: {plugin_dir.name}")
             continue
 
     return loaded
+
+
+def get_last_plugin_load_errors() -> list[str]:
+    return list(_LAST_PLUGIN_LOAD_ERRORS)

@@ -1,4 +1,5 @@
 ﻿import json
+from collections.abc import Callable
 from typing import Any
 
 from openai import OpenAI
@@ -113,6 +114,8 @@ def run_autonomous_task(
     max_cost_usd: float | None = None,
     profile: str | None = None,
     request_id: str | None = None,
+    run_id: str | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     effective_policy = resolve_policy(profile)
     if use_multi_agent:
@@ -132,14 +135,15 @@ def run_autonomous_task(
             request_id=request_id,
         )
 
-    run_id = create_run(
-        task=task,
-        model=model,
-        access_level=access_level,
-        profile=profile,
-        policy=effective_policy,
-        request_id=request_id,
-    )
+    if run_id is None:
+        run_id = create_run(
+            task=task,
+            model=model,
+            access_level=access_level,
+            profile=profile,
+            policy=effective_policy,
+            request_id=request_id,
+        )
     set_run_phase(run_id, "analyzing")
     add_event(run_id, "analyze", "Autonomous task started", {"task": task, "policy": effective_policy})
 
@@ -154,8 +158,15 @@ def run_autonomous_task(
 
     logs: list[dict[str, Any]] = []
     last_error = ""
+    cancel_check = should_cancel or (lambda: False)
 
     for iteration in range(1, 6):
+        if cancel_check():
+            add_event(run_id, "cancel", "Run cancellation requested", {"iteration": iteration})
+            set_run_phase(run_id, "cancelled")
+            finish_run(run_id, "cancelled", "Run cancelled")
+            run = get_run(run_id)
+            return {"ok": False, "run_id": run_id, "error": "Run cancelled", "events": run["events"] if run else []}
         run_state = get_run(run_id) or {}
         runtime_eval = evaluate_constraints(policy=effective_policy, run_state=run_state, action="runtime")
         if bool(runtime_eval.get("blocked")):
@@ -177,6 +188,12 @@ def run_autonomous_task(
         patch_results: list[dict[str, str]] = []
         set_run_phase(run_id, "patching")
         for patch in plan_payload.get("patches", [])[:3]:
+            if cancel_check():
+                add_event(run_id, "cancel", "Run cancellation requested", {"iteration": iteration, "stage": "patching"})
+                set_run_phase(run_id, "cancelled")
+                finish_run(run_id, "cancelled", "Run cancelled")
+                run = get_run(run_id)
+                return {"ok": False, "run_id": run_id, "error": "Run cancelled", "events": run["events"] if run else []}
             file_path = str(patch.get("file_path", "")).strip()
             ast_patch = patch.get("ast_patch")
             unified_diff = str(patch.get("unified_diff", "")).strip()
@@ -289,6 +306,12 @@ def run_autonomous_task(
             action="shell",
         )
         if not bool(shell_eval.get("blocked")) and not bool(shell_eval.get("warnings")) and bool(effective_policy.get("allow_shell", False)):
+            if cancel_check():
+                add_event(run_id, "cancel", "Run cancellation requested", {"iteration": iteration, "stage": "testing"})
+                set_run_phase(run_id, "cancelled")
+                finish_run(run_id, "cancelled", "Run cancelled")
+                run = get_run(run_id)
+                return {"ok": False, "run_id": run_id, "error": "Run cancelled", "events": run["events"] if run else []}
             build_result = run_build(access_level=access_level)
             test_result = run_tests(access_level=access_level)
         else:

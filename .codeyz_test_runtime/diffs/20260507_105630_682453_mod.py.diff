@@ -1,0 +1,10 @@
+--- a/mod.py
++++ b/mod.py
+@@ -2,6 +2,7 @@
+     path,
+     getenv,
+ )
++from os import sep
+ 
+ def run():
+     return path.join('a', getenv('HOME', 'b'))

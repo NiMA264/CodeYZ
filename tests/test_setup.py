@@ -18,6 +18,7 @@ def test_setup_detects_missing_api_key(monkeypatch) -> None:
     env = check_environment()
     line = next(item for item in env if "OPENAI_API_KEY gesetzt" in item)
     assert line.startswith("✖")
+    assert "Setzen via Umgebungsvariable" in line
 
 
 def test_version_file_exists() -> None:

@@ -1,0 +1,9 @@
+--- a/mod.py
++++ b/mod.py
+@@ -1,5 +1,5 @@
+ def a():
+-    return 1
++    return 99
+ 
+ 
+ def b():

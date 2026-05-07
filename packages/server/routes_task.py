@@ -2,6 +2,7 @@
 from pydantic import BaseModel
 
 from packages.core.agent_loop import run_autonomous_task
+from packages.core.job_queue import get_job_queue
 from packages.core.loop import run_task
 from packages.core.model_router import set_role_models
 from packages.core.policy import resolve_policy
@@ -11,6 +12,7 @@ from packages.core.task_runs import (
     add_event,
     claim_approval_event,
     create_checkpoint,
+    create_run,
     get_event,
     get_run,
     has_approval_applied,
@@ -59,15 +61,43 @@ def task_auto(payload: TaskRequest, request: Request) -> dict:
             "Access denied: /task/auto requires access level 'Autonom'",
             "Set access level to 'Autonom' in Composer or request payload.",
         )
-    return run_autonomous_task(
-        payload.task,
+    request_id = str(getattr(request.state, "request_id", ""))
+    run_id = create_run(
+        task=payload.task,
         model=payload.model,
         access_level=payload.access_level,
         profile=payload.profile,
-        use_multi_agent=bool(payload.multi_agent),
-        max_cost_usd=payload.max_cost_usd,
-        request_id=str(getattr(request.state, "request_id", "")),
+        policy=resolve_policy(payload.profile),
+        request_id=request_id,
     )
+    queue = get_job_queue()
+    queued = queue.enqueue(
+        run_id=run_id,
+        request_id=request_id,
+        execute=lambda should_cancel: run_autonomous_task(
+            payload.task,
+            model=payload.model,
+            access_level=payload.access_level,
+            profile=payload.profile,
+            use_multi_agent=bool(payload.multi_agent),
+            max_cost_usd=payload.max_cost_usd,
+            request_id=request_id,
+            run_id=run_id,
+            should_cancel=should_cancel,
+        ),
+    )
+    return {"ok": True, "run_id": run_id, "job_id": queued["job_id"], "state": queued["state"]}
+
+
+@router.post("/cancel/{run_id}")
+def task_cancel(run_id: str) -> dict[str, str]:
+    run = get_run(run_id)
+    if run is None:
+        raise_api_error(404, "run_not_found", "Run not found", "List runs via GET /task/runs first.")
+    result = get_job_queue().cancel(run_id)
+    if result.get("state") == "missing":
+        raise_api_error(409, "cancel_not_possible", "Run is not cancellable", "Run is already completed or unknown to worker.")
+    return result
 
 
 @router.get("/runs")
