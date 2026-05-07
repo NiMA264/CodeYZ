@@ -14,7 +14,8 @@ def test_cli_help_works() -> None:
     assert "CodeYZ" in result.output
 
 
-def test_cli_setup_works() -> None:
+def test_cli_setup_works(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     runner = CliRunner()
     result = runner.invoke(app, ["setup"])
     assert result.exit_code == 0
