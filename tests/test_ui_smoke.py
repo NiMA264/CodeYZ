@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -70,8 +71,7 @@ def test_ui_initializes_without_browser_errors() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     proc = subprocess.Popen(
         [
-            "py",
-            "-3.11",
+            sys.executable,
             "-m",
             "uvicorn",
             "packages.server.app:app",

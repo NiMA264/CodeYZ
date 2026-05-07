@@ -1,5 +1,6 @@
-﻿import pytest
+import pytest
 from fastapi.testclient import TestClient
+from pathlib import Path
 
 from packages.core.project_paths import add_project_path, set_current_project
 from packages.core.rollback import (
@@ -13,8 +14,9 @@ from packages.server.app import app
 
 @pytest.fixture(autouse=True)
 def _ensure_repo_as_current_project() -> None:
-    add_project_path(r"F:\Projekte\CodeYZ")
-    set_current_project(r"F:\Projekte\CodeYZ")
+    repo_root = Path(__file__).resolve().parents[1]
+    add_project_path(str(repo_root))
+    set_current_project(str(repo_root))
 
 
 def test_rollback_restore_file() -> None:

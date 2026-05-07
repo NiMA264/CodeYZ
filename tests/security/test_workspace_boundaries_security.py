@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,9 @@ def test_absolute_outside_workspace_rejected(tmp_path: Path) -> None:
 
 
 def test_windows_style_separators_rejected(tmp_path: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows-specific path separator test")
+
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     add_project_path(str(workspace))

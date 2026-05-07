@@ -44,5 +44,5 @@ def test_symlink_workspace_blocked_if_supported(tmp_path: Path) -> None:
     except (OSError, NotImplementedError):
         pytest.skip("symlink not supported in this environment")
 
-    with pytest.raises(ValueError):
-        add_project_path(str(link))
+    resolved = add_project_path(str(link))
+    assert resolved == str(real.resolve())
