@@ -1,0 +1,16 @@
+* text=auto eol=lf
+
+# Common binary/image assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.jar binary
+*.exe binary
+*.dll binary
